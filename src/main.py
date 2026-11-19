@@ -4,12 +4,13 @@ from collections import Counter
 
 import json
 from config import Config
-from db import init_db, save_job, update_job_status, update_job_match, get_all_jobs_in_session, get_db_connection, count_sends_today, log_send_attempt, get_retryable_jobs, bump_job_attempts
+from db import init_db, save_job, update_job_status, update_job_match, get_all_jobs_in_session, get_db_connection, count_sends_today, log_send_attempt, get_retryable_jobs, bump_job_attempts, update_job_risk
 from collector import collect_all_jobs
 from ats_optimizer import process_job_ats
 from sender import apply_to_job
 from report import generate_html_report, generate_markdown_report
 from filters import filter_jobs
+from sanitize import assess_job_risk
 from notify import notify_all
 from logutil import log_print
 
@@ -126,6 +127,12 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
             break
         log_print(f"\n--- [{idx}/{len(saved_jobs)}] Processando: {job['title']} @ {job['company']} ({job['platform']}) ---")
 
+        risk_flags = assess_job_risk(job)
+        if risk_flags:
+            log_print(f"   -> ⚠ Sinais de risco: {', '.join(risk_flags)} — envio automático bloqueado (revisão manual).")
+            try: update_job_risk(job['id'], risk_flags)
+            except Exception: pass
+
         try:
             ats_res = process_job_ats(job['id'], job['title'], job['company'], job['description'])
             score = ats_res['match_score']
@@ -157,6 +164,8 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
                 elif dry_run:
                     log_print("   -> [Dry-Run] Simulação ativa. PDF e carta gerados, candidatura não disparada.")
                     status = 'prepared'
+                elif risk_flags:
+                    status = 'ready_to_send'
                 elif score_source != 'llm':
                     # score veio do heurístico (IA indisponível/ilegível): nunca dispara envio
                     # automático — fica na fila de revisão manual.

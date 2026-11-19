@@ -43,6 +43,9 @@ def init_db():
     existing_cols = {row[1] for row in cursor.fetchall()}
     if "outcome" not in existing_cols:
         cursor.execute("ALTER TABLE jobs ADD COLUMN outcome TEXT")
+    if "risk_flags" not in existing_cols:
+        # sinais de risco (golpe/injeção/e-mail suspeito, ver sanitize.assess_job_risk), CSV
+        cursor.execute("ALTER TABLE jobs ADD COLUMN risk_flags TEXT")
     if "attempts" not in existing_cols:
         # tentativas de reprocessamento de vaga 'pending'/'failed' (ver get_retryable_jobs)
         cursor.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")
@@ -250,6 +253,15 @@ def bump_job_attempts(job_id: int):
     conn = get_db_connection()
     try:
         conn.execute("UPDATE jobs SET attempts = COALESCE(attempts,0) + 1 WHERE id = ?", (job_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_job_risk(job_id: int, flags: list):
+    conn = get_db_connection()
+    try:
+        conn.execute("UPDATE jobs SET risk_flags = ? WHERE id = ?", (",".join(flags) or None, job_id))
         conn.commit()
     finally:
         conn.close()
