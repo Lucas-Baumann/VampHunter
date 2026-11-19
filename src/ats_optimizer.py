@@ -9,6 +9,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, HRFlowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
+from xml.sax.saxutils import escape as _xml_escape
 
 from config import Config
 
@@ -151,7 +152,21 @@ def _ats_cache_key(job_title: str, company: str, job_description: str, base_cv: 
     raw = json.dumps({"t": job_title, "c": company, "d": job_description, "cv": base_cv}, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-def evaluate_match_score(job_title: str, company: str, job_description: str, base_cv: dict) -> Tuple[int, str]:
+def _heuristic_score(base_cv: dict, job_description: str) -> Tuple[int, str]:
+    """Fallback sem IA: conta skills do currículo presentes na vaga como PALAVRA INTEIRA
+    (antes era substring: 'git' casava 'digital', 'c'/'r' casavam em qualquer texto)."""
+    text = job_description or ""
+    kw_count = 0
+    for kw in base_cv.get('skills', []):
+        kw = (kw or "").strip()
+        if len(kw) >= 1 and re.search(r"(?<!\w)" + re.escape(kw) + r"(?!\w)", text, re.I):
+            kw_count += 1
+    score = min(90, 40 + (kw_count * 10))
+    return score, f"[heurístico] {kw_count} palavra(s)-chave do currículo no texto da vaga (IA indisponível)."
+
+def evaluate_match_score(job_title: str, company: str, job_description: str, base_cv: dict) -> Tuple[int, str, str]:
+    """Retorna (score, motivo, origem) — origem 'llm' ou 'heuristic'. Score heurístico nunca
+    deve disparar envio automático (ver main.py)."""
     """Só pede score+motivo pro LLM - prompt e resposta bem mais curtos que
     evaluate_and_optimize_resume() (que também gera currículo otimizado + carta). Roda pra TODA
     vaga processada, ANTES de decidir se vale a chamada cara: abaixo de Config.MIN_SCORE_FOR_DOCS
@@ -185,26 +200,17 @@ Responda EXATAMENTE no seguinte formato JSON (sem markdown de bloco de codigo):
 """
     response_text = call_llm(prompt)
 
-    score = 50
-    reason = "Análise preliminar realizada."
-
     if response_text:
         try:
             clean_json = response_text.replace("```json", "").replace("```", "").strip()
             parsed = json.loads(clean_json)
-            try:
-                score = max(0, min(100, int(parsed.get("match_score", 50))))
-            except (TypeError, ValueError):
-                score = 50
-            reason = parsed.get("match_reason", reason)
+            score = max(0, min(100, int(parsed.get("match_score"))))
+            return score, parsed.get("match_reason", "Análise realizada."), "llm"
         except Exception as e:
+            # resposta ilegível NÃO vira mais um "50" inventado: cai no heurístico, marcado como tal
             print(f"[ATS AI] Falha ao ler resposta JSON da IA (score): {e}")
-    else:
-        kw_count = sum(1 for kw in base_cv.get('skills', []) if kw.lower() in job_description.lower())
-        score = min(90, 40 + (kw_count * 10))
-        reason = f"Correspondência heurística de {kw_count} palavras-chave no texto da vaga."
-
-    return score, reason
+    score, reason = _heuristic_score(base_cv, job_description)
+    return score, reason, "heuristic"
 
 def evaluate_and_optimize_resume(job_title: str, company: str, job_description: str, base_cv: dict) -> Tuple[int, str, dict, str]:
     """
@@ -295,9 +301,7 @@ Responda EXATAMENTE no seguinte formato JSON (sem markdown de bloco de codigo):
             print(f"[ATS AI] Falha ao ler resposta JSON da IA: {e}")
     else:
         # Fallback Heurístico simples caso IA não esteja configurada
-        kw_count = sum(1 for kw in base_cv.get('skills', []) if kw.lower() in job_description.lower())
-        score = min(90, 40 + (kw_count * 10))
-        reason = f"Correspondência heurística de {kw_count} palavras-chave no texto da vaga."
+        score, reason = _heuristic_score(base_cv, job_description)
 
     return score, reason, optimized_cv, cover_letter
 
@@ -318,27 +322,31 @@ def generate_ats_pdf(cv_data: dict, output_path: Path):
     body_style = ParagraphStyle('BodyStyle', parent=styles['Normal'], fontName='Helvetica', fontSize=10, leading=14, textColor=colors.HexColor('#2D3748'))
     bullet_style = ParagraphStyle('BulletStyle', parent=styles['Normal'], fontName='Helvetica', fontSize=9.5, leading=13, leftIndent=12, textColor=colors.HexColor('#2D3748'))
     
+    def _e(v):
+        # Paragraph do reportlab interpreta mini-HTML: texto vindo da IA/currículo precisa de escape
+        return _xml_escape(str(v)) if v not in (None, '') else ''
+
     story = []
     p_info = cv_data.get('personal_info', {})
     
     # Cabeçalho
-    story.append(Paragraph(p_info.get('name', 'Candidato'), name_style))
+    story.append(Paragraph(_e(p_info.get('name') or 'Candidato'), name_style))
     contact_parts = [p_info.get('email'), p_info.get('phone'), p_info.get('location'), p_info.get('linkedin')]
     contact_text = " | ".join([p for p in contact_parts if p])
-    story.append(Paragraph(contact_text, contact_style))
+    story.append(Paragraph(_e(contact_text), contact_style))
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#CBD5E0'), spaceAfter=8))
     
     # Resumo
     if cv_data.get('summary'):
         story.append(Paragraph("RESUMO PROFISSIONAL", section_title))
-        story.append(Paragraph(cv_data['summary'], body_style))
+        story.append(Paragraph(_e(cv_data['summary']), body_style))
         story.append(Spacer(1, 8))
         
     # Habilidades / Competências (ATS Keywords)
     if cv_data.get('skills'):
         story.append(Paragraph("COMPETÊNCIAS TÉCNICAS E TECNOLOGIAS", section_title))
-        skills_text = " • ".join(cv_data['skills'])
+        skills_text = _e(" • ".join(str(x) for x in cv_data['skills']))
         story.append(Paragraph(skills_text, body_style))
         story.append(Spacer(1, 8))
         
@@ -346,17 +354,17 @@ def generate_ats_pdf(cv_data: dict, output_path: Path):
     if cv_data.get('experiences'):
         story.append(Paragraph("EXPERIÊNCIA PROFISSIONAL", section_title))
         for exp in cv_data['experiences']:
-            title_line = f"<b>{exp.get('position')}</b> — {exp.get('company')} ({exp.get('period')})"
+            title_line = f"<b>{_e(exp.get('position'))}</b> — {_e(exp.get('company'))} ({_e(exp.get('period'))})"
             story.append(Paragraph(title_line, body_style))
             for hl in exp.get('highlights', []):
-                story.append(Paragraph(f"• {hl}", bullet_style))
+                story.append(Paragraph(f"• {_e(hl)}", bullet_style))
             story.append(Spacer(1, 6))
             
     # Formação Acadêmica
     if cv_data.get('education'):
         story.append(Paragraph("FORMAÇÃO ACADÊMICA", section_title))
         for edu in cv_data['education']:
-            edu_line = f"<b>{edu.get('degree')}</b> — {edu.get('institution')} ({edu.get('year')})"
+            edu_line = f"<b>{_e(edu.get('degree'))}</b> — {_e(edu.get('institution'))} ({_e(edu.get('year'))})"
             story.append(Paragraph(edu_line, body_style))
             
     doc.build(story)
@@ -389,12 +397,13 @@ def process_job_ats(job_id: int, job_title: str, company: str, job_description: 
     atinge Config.MIN_SCORE_FOR_DOCS - antes disso os dois documentos eram sempre gerados pra
     toda vaga coletada, mesmo as com match baixíssimo que nunca viram candidatura de verdade."""
     base_cv = load_base_curriculum()
-    score, reason = evaluate_match_score(job_title, company, job_description, base_cv)
+    score, reason, score_source = evaluate_match_score(job_title, company, job_description, base_cv)
 
     if score < Config.MIN_SCORE_FOR_DOCS:
         return {
             "match_score": score,
             "match_reason": reason,
+            "score_source": score_source,
             "resume_path": "",
             "cover_path": "",
             "cover_letter": ""
@@ -406,6 +415,7 @@ def process_job_ats(job_id: int, job_title: str, company: str, job_description: 
     return {
         "match_score": score,
         "match_reason": reason,
+        "score_source": score_source,
         "resume_path": pdf_filename,
         "cover_path": cover_filename,
         "cover_letter": cover_letter

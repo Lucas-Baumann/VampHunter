@@ -4,7 +4,7 @@ from collections import Counter
 
 import json
 from config import Config
-from db import init_db, save_job, update_job_status, update_job_match, get_all_jobs_in_session, get_db_connection, count_sends_today, log_send_attempt
+from db import init_db, save_job, update_job_status, update_job_match, get_all_jobs_in_session, get_db_connection, count_sends_today, log_send_attempt, get_retryable_jobs, bump_job_attempts
 from collector import collect_all_jobs
 from ats_optimizer import process_job_ats
 from sender import apply_to_job
@@ -109,6 +109,16 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
     if not saved_jobs:
         log_print("[Main] Nenhuma nova vaga inédita encontrada nesta rodada.")
 
+    # Vagas de rodadas anteriores que ficaram 'pending'/'failed' (parada manual, IA fora do ar,
+    # erro de PDF) — sem isto nunca mais eram processadas (a dedup as tratava como já vistas).
+    if not _stop_requested():
+        retry_jobs = get_retryable_jobs(exclude_ids={j['id'] for j in saved_jobs})
+        if retry_jobs:
+            log_print(f"[Main] Reprocessando {len(retry_jobs)} vaga(s) pendentes/falhas de rodadas anteriores.")
+            for rj in retry_jobs:
+                bump_job_attempts(rj['id'])
+            saved_jobs.extend(retry_jobs)
+
     # 3. Processar Cada Vaga (ATS + Envio)
     for idx, job in enumerate(saved_jobs, 1):
         if _stop_requested():
@@ -124,6 +134,7 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
             cover_path = ats_res['cover_path']
             cover_text = ats_res['cover_letter']
 
+            score_source = ats_res.get('score_source', 'llm')
             job['match_score'] = score
             job['match_reason'] = reason
             job['resume_pdf_path'] = pdf_path
@@ -146,6 +157,11 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
                 elif dry_run:
                     log_print("   -> [Dry-Run] Simulação ativa. PDF e carta gerados, candidatura não disparada.")
                     status = 'prepared'
+                elif score_source != 'llm':
+                    # score veio do heurístico (IA indisponível/ilegível): nunca dispara envio
+                    # automático — fica na fila de revisão manual.
+                    log_print("   -> Score heurístico (IA indisponível) — envio automático bloqueado; indo para 'ready_to_send' (aprovação manual na aba Histórico).")
+                    status = 'ready_to_send'
                 elif not auto_send:
                     log_print("   -> Match aceito! Envio automático desativado — aguardando aprovação manual (aba Histórico).")
                     status = 'ready_to_send'

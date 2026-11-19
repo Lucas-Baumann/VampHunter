@@ -43,6 +43,9 @@ def init_db():
     existing_cols = {row[1] for row in cursor.fetchall()}
     if "outcome" not in existing_cols:
         cursor.execute("ALTER TABLE jobs ADD COLUMN outcome TEXT")
+    if "attempts" not in existing_cols:
+        # tentativas de reprocessamento de vaga 'pending'/'failed' (ver get_retryable_jobs)
+        cursor.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ats_cache (
             cache_key TEXT PRIMARY KEY,
@@ -66,6 +69,17 @@ def init_db():
             sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # "Lápide" de vagas já vistas: o hash entra aqui junto com o INSERT em jobs e NUNCA sai —
+    # excluir/limpar o Histórico apaga só a linha em jobs, então a vaga não volta (nem é
+    # reenviada) em buscas futuras. Backfill abaixo cobre bancos criados antes desta tabela.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS seen_jobs (
+            job_hash TEXT PRIMARY KEY,
+            seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("INSERT OR IGNORE INTO seen_jobs (job_hash) SELECT job_hash FROM jobs")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)")
     conn.commit()
     conn.close()
 
@@ -108,7 +122,7 @@ def generate_job_hash(title: str, company: str, url: str, location: str = "") ->
 def is_job_processed(job_hash: str) -> bool:
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM jobs WHERE job_hash = ?", (job_hash,))
+    cursor.execute("SELECT 1 FROM seen_jobs WHERE job_hash = ? UNION SELECT 1 FROM jobs WHERE job_hash = ?", (job_hash, job_hash))
     row = cursor.fetchone()
     conn.close()
     return row is not None
@@ -136,6 +150,7 @@ def save_job(job_data: dict) -> int:
             job_data.get('contact_email', ''),
             job_data.get('status', 'pending')
         ))
+        cursor.execute("INSERT OR IGNORE INTO seen_jobs (job_hash) VALUES (?)", (job_hash,))
         conn.commit()
         return cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -214,3 +229,27 @@ def get_all_jobs_in_session(start_time_iso: str = None):
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
+
+
+MAX_RETRY_ATTEMPTS = 3
+
+def get_retryable_jobs(exclude_ids=(), max_attempts: int = MAX_RETRY_ATTEMPTS):
+    """Vagas 'pending'/'failed' de rodadas anteriores (parada manual, IA fora do ar, erro de
+    PDF) que ainda não estouraram o limite de tentativas — antes ficavam presas pra sempre,
+    porque o pipeline só processava vagas recém-inseridas."""
+    conn = get_db_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE status IN ('pending','failed') AND COALESCE(attempts,0) < ? ORDER BY id",
+            (max_attempts,)).fetchall()
+        return [dict(r) for r in rows if r["id"] not in set(exclude_ids)]
+    finally:
+        conn.close()
+
+def bump_job_attempts(job_id: int):
+    conn = get_db_connection()
+    try:
+        conn.execute("UPDATE jobs SET attempts = COALESCE(attempts,0) + 1 WHERE id = ?", (job_id,))
+        conn.commit()
+    finally:
+        conn.close()

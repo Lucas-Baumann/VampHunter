@@ -147,7 +147,7 @@ def apply_linkedin_playwright(job_url: str, pdf_path: str) -> bool:
 def apply_to_job(job: dict, pdf_path: str, cover_letter: str) -> str:
     """
     Seleciona a melhor estratégia de envio de acordo com a vaga (E-mail, Gupy, LinkedIn ou Link Direto).
-    Retorna o status resultante: 'applied', 'prepared' ou 'failed'.
+    Retorna o status resultante: 'applied' (só envio SMTP real), 'prepared' ou 'failed'.
     """
     contact_email = job.get('contact_email')
     platform = job.get('platform', '').lower()
@@ -158,15 +158,22 @@ def apply_to_job(job: dict, pdf_path: str, cover_letter: str) -> str:
         success = send_email_application(contact_email, job['title'], job['company'], cover_letter, pdf_path)
         return 'applied' if success else 'failed'
         
-    # 2. Se a plataforma for Gupy -> Playwright Gupy
-    if 'gupy' in platform or 'gupy.io' in url:
-        success = apply_gupy_playwright(url, pdf_path, cover_letter)
-        return 'applied' if success else 'prepared'
+    # Post de recrutador (platform 'linkedin_post'): a URL é o perfil do autor, não uma vaga
+    # com botão de candidatura — não há o que automatizar, o usuário contata o recrutador.
+    if platform == 'linkedin_post':
+        log_print(f"[Sender] Post de recrutador ({job.get('company')}): material pronto, contato manual com o autor.")
+        return 'prepared'
 
-    # 3. Se a plataforma for LinkedIn -> Playwright LinkedIn
+    # 2/3. Gupy e LinkedIn: o Playwright só abre a vaga e pré-preenche (anexa PDF / localiza
+    # Easy Apply) — NUNCA clica em enviar. Por isso o resultado é 'prepared' (usuário
+    # finaliza); 'applied' só é gravado por envio real (SMTP) ou marcação manual no Histórico.
+    if 'gupy' in platform or 'gupy.io' in url:
+        apply_gupy_playwright(url, pdf_path, cover_letter)
+        return 'prepared'
+
     if 'linkedin' in platform or 'linkedin.com' in url:
-        success = apply_linkedin_playwright(url, pdf_path)
-        return 'applied' if success else 'prepared'
+        apply_linkedin_playwright(url, pdf_path)
+        return 'prepared'
 
     # 4. Caso genérico -> Material fica pronto para o usuário enviar manualmente com 1 clique
     log_print(f"[Sender] Materiais otimizados gerados com sucesso para {job['company']} - {job['title']}.")

@@ -299,6 +299,13 @@ class App(tb.Window, PerfilTabMixin, BuscaTabMixin, IATabMixin, ExecucaoTabMixin
         Config.CUSTOM_LLM_URL = self.env.get("CUSTOM_LLM_URL","")
         Config.CUSTOM_LLM_KEY = self.env.get("CUSTOM_LLM_KEY","")
         Config.GITHUB_TOKEN = self.env.get("GITHUB_TOKEN","")
+        # SMTP também precisa recarregar: "Aprovar e Enviar" (Histórico) roda no mesmo processo
+        # e lia o valor de quando o app abriu.
+        Config.SMTP_HOST = self.env.get("SMTP_HOST") or "smtp.gmail.com"
+        try: Config.SMTP_PORT = int(self.env.get("SMTP_PORT") or "587")
+        except ValueError: Config.SMTP_PORT = 587
+        Config.SMTP_USER = self.env.get("SMTP_USER","")
+        Config.SMTP_PASS = self.env.get("SMTP_PASS","")
         cfg={"keywords":[k.strip() for k in self.var_keywords.get().split(",") if k.strip()],"work_mode":self.var_work_mode.get(),"presencial_location":self.var_presencial_loc.get().strip(),"contract_type":self.var_contract.get(),"min_score":int(self.var_min_score.get()),"limit_per_source":int(self.var_limit.get()),"min_salary":int(self.var_min_salary.get()),"level":self.var_level.get(),"exclude_keywords":[k.strip() for k in self.var_exclude.get().split(",") if k.strip()],"mandatory_words":[k.strip() for k in self.var_mandatory.get().split(",") if k.strip()],"blocked_companies":[k.strip() for k in self.var_blocked.get().split(",") if k.strip()],"max_age_days":int(self.var_max_age.get()),"only_pcd":bool(self.var_only_pcd.get()),"english_filter":self.var_english.get(),"daily_limit":int(self.var_daily_limit.get()),"enable_linkedin_posts":bool(self.var_enable_linkedin_posts.get()),"linkedin_posts_limit":int(self.var_linkedin_posts_limit.get()),"auto_send":bool(self.var_auto_send.get())}
         save_search_config(cfg); self.search_cfg=cfg
         if not silent: messagebox.showinfo("Salvo","Salvo em curriculum_base.json, .env, search_config.json")

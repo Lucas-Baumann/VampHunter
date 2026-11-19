@@ -25,7 +25,8 @@ jobs:
           python-version: '3.12'
 
       - name: Instala só o necessário pra rodar o collector (sem playwright/pyinstaller — não usados aqui)
-        run: pip install requests beautifulsoup4
+        # python-dotenv: collector -> logutil -> config importa dotenv; sem ele o script nem importa
+        run: pip install requests beautifulsoup4 python-dotenv
 
       - name: Roda o health-check das fontes
         run: python tests/test_sources_health.py

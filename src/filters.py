@@ -31,17 +31,34 @@ def parse_salary(text: str) -> int:
         except: pass
     return max(vals) if vals else 0
 
+_LEVEL_PATTERNS = [
+    ("estagio", re.compile(r"\b(est[áa]gio|estagi[áa]ri[oa]|intern|internship|trainee)\b")),
+    ("junior", re.compile(r"\b(junior|j[úu]nior|jr)\b")),
+    ("pleno", re.compile(r"\b(pleno|mid[- ]?level|mid[- ]?senior)\b")),
+    ("senior", re.compile(r"\b(senior|s[êe]nior|sr|staff|principal|lead|tech lead)\b")),
+]
+
+def _match_level(text: str) -> str:
+    for level, pat in _LEVEL_PATTERNS:
+        if pat.search(text):
+            return level
+    return ""
+
 def detect_level(title: str, desc: str) -> str:
-    t = (title + " " + desc).lower()
-    if any(k in t for k in ["estágio", "estagio", "intern", "trainee"]):
-        return "estagio"
-    if any(k in t for k in ["junior", "jr ", "jr.", "júnior"]):
-        return "junior"
-    if any(k in t for k in ["pleno", "mid-level", "mid level", "mid senior"]):
-        return "pleno"
-    if any(k in t for k in ["senior", "sênior", "sr ", "sr.", "staff", "principal", "lead", "tech lead"]):
-        return "senior"
-    return "nao_especificado"
+    """Nível por palavra inteira (\\b) — antes era substring, e 'intern' casava com
+    'internet'/'internacional' (vaga Pleno virava 'estágio'). O título tem prioridade: a
+    descrição costuma citar outros níveis ('mentorar júniores')."""
+    lvl = _match_level((title or "").lower())
+    if lvl:
+        return lvl
+    return _match_level((desc or "").lower()) or "nao_especificado"
+
+def _contains_term(text: str, term: str) -> bool:
+    """Termo como palavra inteira, sem casar dentro de outra ('java' não casa 'javascript')."""
+    term = (term or "").strip()
+    if not term:
+        return False
+    return re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text, re.I) is not None
 
 _REMOTE_SIGNALS = ["remoto", "remote", "home office", "trabalho remoto", "100% remoto", "full remote", "totalmente remoto", "work from home", "wfh", "anywhere"]
 _HYBRID_SIGNALS = ["híbrido", "hibrido", "hybrid", "modelo híbrido", "parcialmente remoto"]
@@ -144,7 +161,10 @@ def is_foreign_job_location(location: str, title: str = "") -> bool:
     combined = f"{location} {title}".lower()
     if not combined.strip():
         return False
-    if any(k in combined for k in ["estados unidos", "united states", " usa", "u.s.a"]):
+    if any(k in combined for k in ["estados unidos", "united states", "u.s.a"]):
+        return True
+    # "USA" só como sigla em maiúsculas e palavra inteira — ' usa' casava 'usabilidade'/'usando'
+    if re.search(r"\bUSA\b", f"{location} {title}"):
         return True
     if any(name in combined for name in _US_STATE_NAMES):
         return True
@@ -209,7 +229,7 @@ def matches_filters(job: Dict, cfg: Dict) -> tuple[bool, str]:
 
     # 1. Excluir palavras-chave
     for kw in cfg.get("exclude_keywords", []):
-        if kw.lower() in combined or kw.lower() in title.lower():
+        if _contains_term(combined, kw):
             return False, f"excluir_keyword:{kw}"
 
     # 2. Obrigatórias (pelo menos uma)
@@ -219,7 +239,7 @@ def matches_filters(job: Dict, cfg: Dict) -> tuple[bool, str]:
 
     # 3. Empresas bloqueadas
     for b in cfg.get("blocked_companies",[]):
-        if b.lower() in company_l:
+        if _contains_term(company_l, b):
             return False, f"empresa_bloqueada:{b}"
 
     # 5. Salário mínimo

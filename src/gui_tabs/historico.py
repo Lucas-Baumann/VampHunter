@@ -51,6 +51,8 @@ class HistoricoTabMixin:
         info_icon(actions,"Gera currículo otimizado + carta de apresentação pra vaga selecionada, mesmo que o\nmatch esteja abaixo do piso automático (50%) — dispara uma chamada de IA na hora.").pack(side="left")
 
         actions2=ctk.CTkFrame(top, fg_color="transparent"); actions2.pack(fill="x", pady=(8,0))
+        ctk.CTkButton(actions2,text="✅ Marcar como enviada",fg_color="transparent",border_width=1,border_color=t["success"],
+                      text_color=t["success"],hover_color=t["window_bg"],command=self.mark_applied_selected).pack(side="left",padx=(0,16))
         ctk.CTkButton(actions2,text="📂 Abrir PDF/Carta",fg_color="transparent",border_width=1,border_color=t["border"],
                       text_color=t["text"],hover_color=t["window_bg"],command=self.open_docs_selected).pack(side="left")
         ctk.CTkButton(actions2,text="🗑 Excluir Selecionadas",fg_color="transparent",border_width=1,border_color=t["danger"],
@@ -218,6 +220,16 @@ class HistoricoTabMixin:
             self._open_folder(row["cover_letter_path"]); opened=True
         if not opened:
             messagebox.showwarning("Abrir PDF/Carta","Os caminhos salvos no banco não existem mais no disco (arquivo movido/apagado).")
+    def mark_applied_selected(self):
+        """Confirmação manual: Gupy/LinkedIn só pré-preenchem ('prepared') — quando você
+        finaliza a candidatura no site, marque aqui pra virar 'applied' (usa applied_at)."""
+        sel=self.tree.selection()
+        if not sel: messagebox.showinfo("Marcar como enviada","Selecione ao menos uma vaga na lista."); return
+        try:
+            from db import update_job_status
+            for s in sel: update_job_status(int(s), "applied")
+            self._refresh_hist(); self._refresh_dashboard()
+        except Exception as e: messagebox.showerror("Marcar como enviada",str(e))
     def mark_job_outcome(self):
         sel=self.tree.selection()
         if not sel: messagebox.showinfo("Outcome","Selecione uma vaga na lista."); return

@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Testes de regressão dos bugs corrigidos na auditoria de 2026-11-19.
+Sem rede, sem IA, banco temporário — rode com: python tests/test_regressions.py (ou pytest)."""
+import sys, pathlib, tempfile
+from unittest import mock
+
+BASE = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE / "src"))
+
+import filters, sender, ats_optimizer, db
+from config import Config
+
+
+def test_level_nao_casa_internet():
+    assert filters.detect_level("Desenvolvedor Pleno", "projetos de internet internacionais") == "pleno"
+    assert filters.detect_level("Dev", "trabalho com internet e clientes internacionais") == "nao_especificado"
+    assert filters.detect_level("Estagiário de TI", "") == "estagio"
+    assert filters.detect_level("Software Intern", "") == "estagio"
+    ok, _ = filters.matches_filters({"title": "Dev Pleno", "description": "internet", "company": "X", "location": "Remoto"}, {"level": "pleno"})
+    assert ok
+
+
+def test_usabilidade_nao_e_exterior():
+    assert not filters.is_foreign_job_location("Remoto", "Analista de usabilidade")
+    assert filters.is_foreign_job_location("Remote, USA", "Dev")
+
+
+def test_exclude_e_blocked_palavra_inteira():
+    job = {"title": "Dev JavaScript", "description": "", "company": "Viasoft", "location": "Remoto"}
+    assert filters.matches_filters(job, {"exclude_keywords": ["java"]})[0]
+    assert not filters.matches_filters(job, {"exclude_keywords": ["javascript"]})[0]
+    assert filters.matches_filters(job, {"blocked_companies": ["Via"]})[0]
+    assert not filters.matches_filters(job, {"blocked_companies": ["Viasoft"]})[0]
+
+
+def test_apply_nunca_marca_applied_sem_smtp():
+    with mock.patch.object(sender, "apply_linkedin_playwright", return_value=True) as li, \
+         mock.patch.object(sender, "apply_gupy_playwright", return_value=True):
+        post = {"platform": "linkedin_post", "url": "https://linkedin.com/in/x", "title": "t", "company": "c", "contact_email": ""}
+        assert sender.apply_to_job(post, "cv.pdf", "carta") == "prepared"
+        assert not li.called
+        assert sender.apply_to_job({"platform": "linkedin", "url": "https://linkedin.com/jobs/1", "title": "t", "company": "c"}, "cv.pdf", "") == "prepared"
+        assert sender.apply_to_job({"platform": "gupy", "url": "https://x.gupy.io/1", "title": "t", "company": "c"}, "cv.pdf", "") == "prepared"
+    with mock.patch.object(sender, "send_email_application", return_value=True):
+        assert sender.apply_to_job({"platform": "x", "contact_email": "a@b.com", "title": "t", "company": "c"}, "cv.pdf", "") == "applied"
+
+
+def test_heuristica_palavra_inteira_e_origem():
+    cv = {"skills": ["C", "R", "Git"], "personal_info": {"name": "X"}}
+    desc = "Analista contabil: conciliacao, relatorios gerenciais e controle de contratos digitais."
+    with mock.patch.object(ats_optimizer, "call_llm", return_value=""), mock.patch.object(ats_optimizer, "load_skills_context", return_value=""):
+        score, reason, source = ats_optimizer.evaluate_match_score("t", "c", desc, cv)
+    assert source == "heuristic" and score < 60, (score, reason)
+    with mock.patch.object(ats_optimizer, "call_llm", return_value="isto não é json"), mock.patch.object(ats_optimizer, "load_skills_context", return_value=""):
+        assert ats_optimizer.evaluate_match_score("t", "c", desc, cv)[2] == "heuristic"
+    with mock.patch.object(ats_optimizer, "call_llm", return_value='{"match_score": "85", "match_reason": "ok"}'), mock.patch.object(ats_optimizer, "load_skills_context", return_value=""):
+        assert ats_optimizer.evaluate_match_score("t", "c", desc, cv) == (85, "ok", "llm")
+
+
+def test_pdf_com_markup_quebrado():
+    cv = {"personal_info": {"name": "Fulano <b>"}, "summary": "Stack: <b>Python & SQL", "skills": ["C++ <x>"],
+          "experiences": [{"position": "Dev <i>", "company": "A&B", "period": "2020", "highlights": ["<b>x"]}],
+          "education": [{"degree": None, "institution": "U", "year": "2020"}]}
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d) / "t.pdf"
+        ats_optimizer.generate_ats_pdf(cv, out)
+        assert out.stat().st_size > 500
+
+
+def test_db_lapide_e_retry():
+    with tempfile.TemporaryDirectory() as d:
+        old = Config.DB_PATH
+        Config.DB_PATH = pathlib.Path(d) / "t.db"
+        try:
+            db.init_db()
+            job = {"title": "Dev", "company": "Acme", "location": "Remoto", "url": "u", "platform": "gupy", "description": "d"}
+            jid = db.save_job(job)
+            assert jid > 0
+            # excluir do histórico NÃO pode reabrir a vaga
+            conn = db.get_db_connection(); conn.execute("DELETE FROM jobs"); conn.commit(); conn.close()
+            assert db.save_job(job) == -1
+            # fila de retentativa
+            jid2 = db.save_job({**job, "title": "Dev 2"})
+            assert [j["id"] for j in db.get_retryable_jobs()] == [jid2]
+            for _ in range(db.MAX_RETRY_ATTEMPTS):
+                db.bump_job_attempts(jid2)
+            assert db.get_retryable_jobs() == []
+            db.update_job_status(jid2, "skipped")
+            assert db.get_retryable_jobs() == []
+        finally:
+            Config.DB_PATH = old
+
+
+if __name__ == "__main__":
+    fails = 0
+    for name, fn in sorted((n, f) for n, f in globals().items() if n.startswith("test_")):
+        try:
+            fn(); print(f"  [PASS] {name}")
+        except Exception as e:
+            fails += 1; print(f"  [FAIL] {name}: {type(e).__name__}: {e}")
+    print(f"\n{'OK' if not fails else str(fails) + ' falha(s)'}")
+    sys.exit(1 if fails else 0)
