@@ -7,7 +7,7 @@ from unittest import mock
 BASE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / "src"))
 
-import filters, sender, ats_optimizer, db, sanitize, factcheck, collector, validator, followup
+import filters, sender, ats_optimizer, db, sanitize, factcheck, collector, validator, followup, llm, report
 from config import Config
 
 
@@ -223,6 +223,38 @@ def test_followup_rascunho():
     assert followup.build_followup_draft(job, cv, lambda p: "Veja https://evil.io/x e responda no link agora mesmo por favor")["source"] == "template"
     assert followup.build_followup_draft(job, cv, lambda p: 1 / 0)["source"] == "template"
     assert followup.mailto_link("a@b.com", "Oi ç", "l1\nl2").startswith("mailto:a%40b.com?subject=Oi%20")
+
+def test_llm_retry_em_429_e_timeout():
+    r429, r200 = mock.Mock(status_code=429, text="x"), mock.Mock(status_code=200, text="ok")
+    with mock.patch.object(llm.requests, "post", side_effect=[r429, r200]) as post, mock.patch.object(llm.time, "sleep"):
+        assert llm._post_with_retry("u") is r200 and post.call_count == 2
+    with mock.patch.object(llm.requests, "post", side_effect=[llm.requests.Timeout(), r200]), mock.patch.object(llm.time, "sleep"):
+        assert llm._post_with_retry("u") is r200
+    with mock.patch.object(llm.requests, "post", return_value=r429) as post, mock.patch.object(llm.time, "sleep"):
+        assert llm._post_with_retry("u").status_code == 429 and post.call_count == 3   # desiste após 3 tentativas
+    with mock.patch.object(llm.requests, "post", return_value=mock.Mock(status_code=401, text="no")) as post, mock.patch.object(llm.time, "sleep"):
+        llm._post_with_retry("u"); assert post.call_count == 1                         # 401 não repete
+    assert ats_optimizer.call_llm is llm.call_llm
+
+
+def test_historico_db_e_relatorio():
+    with tempfile.TemporaryDirectory() as d:
+        old = Config.DB_PATH; Config.DB_PATH = pathlib.Path(d) / "t.db"
+        try:
+            db.init_db()
+            a = db.save_job({"title": "A", "company": "X", "location": "R", "url": "u1", "platform": "x", "description": "d"})
+            b = db.save_job({"title": "B", "company": "Y", "location": "R", "url": "u2", "platform": "x", "description": "d"})
+            db.update_job_risk(b, ["email_generico"])
+            assert [r["id"] for r in db.list_history()] == [b, a]
+            assert [r["title"] for r in db.list_history("title", "asc")] == ["A", "B"]
+            assert len(db.list_history("title; DROP TABLE jobs", "asc")) == 2      # coluna fora da lista é ignorada
+            assert db.get_job(b)["risk_flags"] == "email_generico" and db.get_job(999) is None
+            out = pathlib.Path(d) / "r.html"
+            report.generate_html_report([{**db.get_job(b), "status": "ready_to_send"}], out)
+            html = out.read_text(encoding="utf-8")
+            assert "Aguardando sua revisão" in html and "email_generico" in html
+        finally:
+            Config.DB_PATH = old
 
 
 if __name__ == "__main__":

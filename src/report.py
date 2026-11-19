@@ -96,9 +96,15 @@ def generate_html_report(jobs: List[Dict], output_file: Path) -> Path:
         status_badge = {
             'applied': '<span class="badge badge-success">Enviado / Candidatado</span>',
             'prepared': '<span class="badge badge-info">PDF & Carta Prontos</span>',
+            'ready_to_send': '<span class="badge badge-warning">Aguardando sua revisão</span>',
             'skipped': '<span class="badge badge-warning">Score Baixo (Ignorado)</span>',
             'failed': '<span class="badge badge-danger">Falha no Envio</span>'
         }.get(status, f'<span class="badge">{status}</span>')
+        risk = j.get('risk_flags') or ''
+        if isinstance(risk, (list, tuple)):
+            risk = ",".join(risk)
+        if risk:
+            status_badge += f'<br><span class="badge badge-danger" title="Envio automático bloqueado">⚠ {_esc(risk.replace(",", ", "))}</span>'
 
         desc = j.get('description', '') or ''
         short_desc = (desc[:250] + '...') if len(desc) > 250 else desc

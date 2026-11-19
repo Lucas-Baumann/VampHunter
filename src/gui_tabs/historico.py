@@ -62,17 +62,17 @@ class HistoricoTabMixin:
                       text_color=t["danger"],hover_color=t["window_bg"],command=self.delete_selected_jobs).pack(side="left",padx=(16,4))
         info_icon(actions2,"Apaga só as vagas selecionadas (ctrl/shift+clique na lista) do Histórico e do Dashboard -\ndiferente de 'Limpar Histórico', que apaga tudo de uma vez. Opção de apagar junto o\nPDF/carta gerados pra elas.").pack(side="left")
 
-        cols=("vaga","empresa","local","match","status","outcome","plataforma")
-        self._hist_col_labels={"vaga":"Vaga","empresa":"Empresa","local":"Local","match":"Match","status":"Status","outcome":"Outcome","plataforma":"Plataforma"}
+        cols=("vaga","empresa","local","match","status","outcome","plataforma","risco")
+        self._hist_col_labels={"vaga":"Vaga","empresa":"Empresa","local":"Local","match":"Match","status":"Status","outcome":"Outcome","plataforma":"Plataforma","risco":"Risco"}
         # coluna exibida -> coluna real do SQL, pra ordenação por clique no cabeçalho
-        self._hist_col_to_sql={"vaga":"title","empresa":"company","local":"location","match":"match_score","status":"status","outcome":"outcome","plataforma":"platform"}
+        self._hist_col_to_sql={"vaga":"title","empresa":"company","local":"location","match":"match_score","status":"status","outcome":"outcome","plataforma":"platform","risco":"risk_flags"}
         # nenhuma coluna ordenada por padrão -> ordem natural (mais recente primeiro, por id)
         self._hist_sort_col=None; self._hist_sort_dir=None
         tree_outer=ctk.CTkFrame(f, fg_color=t["card_bg"], corner_radius=10, border_width=1, border_color=t["border"], bg_color=t["window_bg"])
         tree_outer.pack(fill="both",expand=True)
         self.tree=ttk.Treeview(tree_outer,columns=cols,show="headings",height=14,style="Vamp.Treeview")
         for c in cols: self.tree.heading(c,command=lambda c=c:self._sort_hist_by(c))
-        self.tree.column("vaga",width=240); self.tree.column("empresa",width=150); self.tree.column("local",width=120); self.tree.column("match",width=55,anchor="center"); self.tree.column("status",width=95,anchor="center"); self.tree.column("outcome",width=100,anchor="center"); self.tree.column("plataforma",width=85,anchor="center")
+        self.tree.column("vaga",width=240); self.tree.column("empresa",width=150); self.tree.column("local",width=120); self.tree.column("match",width=55,anchor="center"); self.tree.column("status",width=95,anchor="center"); self.tree.column("outcome",width=100,anchor="center"); self.tree.column("plataforma",width=85,anchor="center"); self.tree.column("risco",width=150)
         self._update_hist_headers()
         self.tree.pack(fill="both",expand=True,padx=8,pady=8); self.tree.bind("<Double-Button-1>",self._on_hist_dbl); self._refresh_hist()
     def _update_hist_headers(self):
@@ -95,38 +95,29 @@ class HistoricoTabMixin:
         self._refresh_hist()
     def _refresh_hist(self):
         try:
+            from db import list_history
             for i in self.tree.get_children(): self.tree.delete(i)
             if not DB_PATH.exists(): return
-            import sqlite3; con=sqlite3.connect(str(DB_PATH)); con.row_factory=sqlite3.Row; cur=con.cursor()
-
-            if self._hist_sort_col:
-                sql_col=self._hist_col_to_sql.get(self._hist_sort_col,"id")
-                direction="ASC" if self._hist_sort_dir=="asc" else "DESC"
-                order_sql=f"{sql_col} {direction}, id DESC"  # desempate estável (ex: mesmo match_score)
-            else:
-                order_sql="id DESC"
-
-            cur.execute(f"SELECT id,title,company,location,match_score,status,outcome,platform FROM jobs ORDER BY {order_sql} LIMIT 300")
-            for r in cur.fetchall():
-                self.tree.insert("",tk.END,iid=str(r["id"]),values=(r["title"],r["company"],r["location"],f"{r['match_score'] or 0}%",r["status"],r["outcome"] or "-",r["platform"]))
-            con.close()
-        except: pass
+            sql_col=self._hist_col_to_sql.get(self._hist_sort_col) if self._hist_sort_col else None
+            for r in list_history(sql_col,self._hist_sort_dir or "asc"):
+                risco=(r["risk_flags"] or "").replace(",",", ")
+                self.tree.insert("",tk.END,iid=str(r["id"]),values=(r["title"],r["company"],r["location"],f"{r['match_score'] or 0}%",r["status"],r["outcome"] or "-",r["platform"],("⚠ "+risco) if risco else "-"))
+        except Exception: pass
     def _on_hist_dbl(self,ev):
         sel=self.tree.selection()
         if not sel: return
         try:
-            import sqlite3; con=sqlite3.connect(str(DB_PATH)); con.row_factory=sqlite3.Row; cur=con.cursor()
-            cur.execute("SELECT url FROM jobs WHERE id=?",(int(sel[0]),)); row=cur.fetchone()
+            from db import get_job
+            row=get_job(int(sel[0]))
             if row and row["url"]: webbrowser.open(row["url"])
-            con.close()
-        except: pass
+        except Exception: pass
     def approve_and_send_selected(self):
         sel=self.tree.selection()
         if not sel: messagebox.showinfo("Aprovar e Enviar","Selecione uma vaga na lista."); return
         job_id=int(sel[0])
         try:
-            import sqlite3; con=sqlite3.connect(str(DB_PATH)); con.row_factory=sqlite3.Row; cur=con.cursor()
-            cur.execute("SELECT * FROM jobs WHERE id=?",(job_id,)); row=cur.fetchone(); con.close()
+            from db import get_job
+            row=get_job(job_id)
         except Exception as e: messagebox.showerror("Aprovar e Enviar",str(e)); return
         if not row: messagebox.showwarning("Aprovar e Enviar","Vaga não encontrada."); return
         if row["status"]!="ready_to_send":
@@ -178,8 +169,8 @@ class HistoricoTabMixin:
         if not sel: messagebox.showinfo("Gerar PDF/Carta","Selecione uma vaga na lista."); return
         job_id=int(sel[0])
         try:
-            import sqlite3; con=sqlite3.connect(str(DB_PATH)); con.row_factory=sqlite3.Row; cur=con.cursor()
-            cur.execute("SELECT * FROM jobs WHERE id=?",(job_id,)); row=cur.fetchone(); con.close()
+            from db import get_job
+            row=get_job(job_id)
         except Exception as e: messagebox.showerror("Gerar PDF/Carta",str(e)); return
         if not row: messagebox.showwarning("Gerar PDF/Carta","Vaga não encontrada."); return
         if not messagebox.askyesno("Gerar PDF/Carta", f"Gerar currículo otimizado + carta de apresentação pra:\n{row['title']} @ {row['company']}\n\nIsso dispara uma chamada de IA agora (mesmo com match de {row['match_score'] or 0}%). Continuar?"):
@@ -211,8 +202,8 @@ class HistoricoTabMixin:
         if not sel: messagebox.showinfo("Abrir PDF/Carta","Selecione uma vaga na lista."); return
         job_id=int(sel[0])
         try:
-            import sqlite3; con=sqlite3.connect(str(DB_PATH)); con.row_factory=sqlite3.Row; cur=con.cursor()
-            cur.execute("SELECT resume_pdf_path, cover_letter_path FROM jobs WHERE id=?",(job_id,)); row=cur.fetchone(); con.close()
+            from db import get_job
+            row=get_job(job_id)
         except Exception as e: messagebox.showerror("Abrir PDF/Carta",str(e)); return
         if not row or not (row["resume_pdf_path"] or row["cover_letter_path"]):
             messagebox.showinfo("Abrir PDF/Carta","Essa vaga ainda não tem PDF/carta gerados. Use '📄 Gerar PDF/Carta' primeiro."); return

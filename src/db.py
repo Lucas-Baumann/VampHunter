@@ -206,6 +206,35 @@ def update_job_outcome(job_id: int, outcome: str):
     conn.commit()
     conn.close()
 
+_HISTORY_SORT_COLS = {"title", "company", "location", "match_score", "status", "outcome", "platform", "risk_flags"}
+
+
+def list_history(sort_col: str = None, direction: str = "asc", limit: int = 300) -> list:
+    """Linhas do Histórico (GUI). `sort_col` só aceita colunas conhecidas (nunca interpola
+    texto livre no SQL); sem ordenação = mais recente primeiro (id DESC)."""
+    if sort_col in _HISTORY_SORT_COLS:
+        order = f"{sort_col} {'ASC' if direction == 'asc' else 'DESC'}, id DESC"
+    else:
+        order = "id DESC"
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id,title,company,location,match_score,status,outcome,platform,risk_flags "
+        f"FROM jobs ORDER BY {order} LIMIT ?", (int(limit),))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_job(job_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 MAX_FOLLOWUPS = 2
 
 
