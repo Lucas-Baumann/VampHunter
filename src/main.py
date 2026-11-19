@@ -5,7 +5,7 @@ from collections import Counter
 import json
 from config import Config
 from db import init_db, save_job, update_job_status, update_job_match, get_all_jobs_in_session, get_db_connection, count_sends_today, log_send_attempt, get_retryable_jobs, bump_job_attempts, update_job_risk
-from collector import collect_all_jobs
+from collector import collect_all_jobs, enrich_job_descriptions
 from ats_optimizer import process_job_ats
 from sender import apply_to_job
 from report import generate_html_report, generate_markdown_report
@@ -84,6 +84,21 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
         if rejected:
             breakdown = ", ".join(f"{motivo} ({qtd})" for motivo, qtd in rejected.most_common())
             log_print(f"[Filtros] Motivos de rejeição: {breakdown}")
+
+    # Fontes com card curto (~300 chars): busca a descrição completa só das vagas que
+    # sobraram no 1º filtro e filtra de novo — regime/contrato/nível/salário passam a enxergar
+    # o texto real, e a IA também.
+    if raw_jobs:
+        try:
+            n_enriched = enrich_job_descriptions(raw_jobs, should_stop=should_stop)
+            if n_enriched:
+                log_print(f"[Detalhes] {n_enriched} vaga(s) com descrição completa buscada na página da vaga.")
+                if filter_cfg:
+                    before2 = len(raw_jobs)
+                    raw_jobs = filter_jobs(raw_jobs, filter_cfg)
+                    log_print(f"[Filtros] 2º passe (descrição completa): {before2} -> {len(raw_jobs)} vagas.")
+        except Exception as e:
+            log_print(f"[Detalhes] Falha ao buscar descrições completas: {e}")
 
     # daily_limit agora é só sobre ENVIO de verdade (Playwright/SMTP via apply_to_job) - a
     # etapa de pontuar/gerar PDF é local (IA + reportlab), não bate em LinkedIn/Gupy, então

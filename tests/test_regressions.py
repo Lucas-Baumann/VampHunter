@@ -7,7 +7,7 @@ from unittest import mock
 BASE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / "src"))
 
-import filters, sender, ats_optimizer, db, sanitize
+import filters, sender, ats_optimizer, db, sanitize, factcheck, collector, validator
 from config import Config
 
 
@@ -140,6 +140,54 @@ def test_db_risk_flags():
             assert v == "texto_oculto,email_generico"
         finally:
             Config.DB_PATH = old
+
+
+CV = {"personal_info": {"name": "Fulano de Tal", "email": "f@x.com", "phone": "(11) 99999-0000"},
+      "summary": "Dev Python com 5 anos de experiencia.", "skills": ["Python", "Django", "SQL"],
+      "experiences": [{"company": "Acme", "position": "Dev", "period": "2020-2024", "highlights": ["API em Django"]}],
+      "education": [{"degree": "ADS", "institution": "U", "year": "2019"}]}
+
+
+def test_factcheck_skills_resumo_carta():
+    s, sk, c, issues = factcheck.check_generated(
+        CV, "Vaga Python e Kubernetes", "Dev com 12 anos e aumento de 300% de receita.",
+        ["Python", "Kubernetes", "Rust"], "Tenho 5 anos de Python. Aumentei vendas em 300% na Acme. Gosto de APIs.")
+    assert sk == ["Python"]                      # Kubernetes/Rust não estão no currículo
+    assert s == ""                               # número sem lastro -> volta ao resumo original
+    assert "300" not in c and "5 anos" in c and "APIs" in c
+    assert len(issues) == 3
+
+
+def test_dimensoes_no_motivo():
+    resp = '{"match_score": 80, "match_reason": "boa aderencia", "dimensions": {"skills": 90, "senioridade": 70, "localizacao_regime": 100, "idioma": "x"}}'
+    with mock.patch.object(ats_optimizer, "call_llm", return_value=resp), mock.patch.object(ats_optimizer, "load_skills_context", return_value=""):
+        score, reason, src = ats_optimizer.evaluate_match_score("t", "c", "d", CV)
+    assert score == 80 and src == "llm" and "skills 90" in reason and "senioridade 70" in reason and "idioma" not in reason
+
+
+def test_truncamento_mantem_fim_da_vaga():
+    t = sanitize.sanitize_untrusted("INICIO " + "x " * 3000 + "REQUISITO_FINAL", 3000)
+    assert len(t) <= 3000 and "INICIO" in t and "REQUISITO_FINAL" in t
+
+
+def test_validador_de_pdf():
+    with tempfile.TemporaryDirectory() as d:
+        out = pathlib.Path(d) / "t.pdf"
+        ats_optimizer.generate_ats_pdf(CV, out)
+        assert validator.check_pdf_content(out, CV) == []
+        assert "e-mail" in validator.check_pdf_content(out, {**CV, "personal_info": {**CV["personal_info"], "email": "outro@y.com"}})
+
+
+def test_enriquecimento_de_descricao():
+    html = '<html><script type="application/ld+json">{"@type":"JobPosting","description":"<p>Requisitos: Python e <b>SQL</b></p>"}</script></html>'
+    resp = mock.Mock(status_code=200, text=html)
+    jobs = [{"platform": "infojobs", "url": "u1", "description": "curta"},
+            {"platform": "gupy", "url": "u2", "description": "curta"},
+            {"platform": "vagascom", "url": "u3", "description": "x" * 900}]
+    with mock.patch.object(collector.requests, "get", return_value=resp) as g, mock.patch.object(collector, "jitter_sleep"):
+        n = collector.enrich_job_descriptions(jobs)
+    assert n == 1 and g.call_count == 1           # só infojobs: gupy não está na lista, vagascom já é longa
+    assert jobs[0]["description"] == "Requisitos: Python e SQL" and jobs[1]["description"] == "curta"
 
 
 if __name__ == "__main__":

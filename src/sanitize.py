@@ -53,7 +53,11 @@ def sanitize_untrusted(text: str, max_len: int = 3000) -> str:
     t = t.replace("```", "'''")  # não deixa a vaga fechar/abrir bloco de código do prompt
     t = re.sub(r"[ \t]+", " ", t)
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
-    return t[:max_len]
+    if len(t) > max_len:
+        # requisitos costumam ficar no FIM da vaga: mantém começo + final em vez de cortar o fim
+        head = max_len * 2 // 3
+        t = t[:head] + " […] " + t[-(max_len - head - 5):]
+    return t
 
 
 def has_hidden_text(text: str) -> bool:

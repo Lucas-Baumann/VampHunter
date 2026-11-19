@@ -1036,3 +1036,51 @@ def collect_all_jobs(keywords_list: List[str], location: str = "Brasil", limit_p
         
     log_print(f"[Collector] Total de vagas coletadas (bruto): {len(all_jobs)}")
     return all_jobs
+
+# Fontes cujo card da listagem traz só ~300 caracteres; a página da vaga tem o JSON-LD
+# schema.org JobPosting com a descrição completa (verificado em InfoJobs, Vagas.com,
+# Programathor e WWR). Gupy/Catho/GeekHunter já trazem texto completo.
+_DETAIL_PLATFORMS = {"infojobs", "vagascom", "programathor", "weworkremotely"}
+
+
+def fetch_jobposting_description(job_url: str, backoff_key: str) -> str:
+    """Descrição completa via JSON-LD JobPosting da página da vaga ('' se não achar)."""
+    if not job_url or _backoff_active(backoff_key):
+        return ""
+    try:
+        resp = requests.get(job_url, headers=_headers(), timeout=10)
+        if resp.status_code in (429, 999):
+            _trip_backoff(backoff_key, resp.status_code)
+            return ""
+        if resp.status_code != 200:
+            return ""
+        for block in re.findall(r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>', resp.text, re.S):
+            try:
+                data = json.loads(block)
+            except Exception:
+                continue
+            for obj in (data if isinstance(data, list) else [data]):
+                if isinstance(obj, dict) and obj.get("@type") == "JobPosting" and obj.get("description"):
+                    return BeautifulSoup(obj["description"], "html.parser").get_text(separator=" ", strip=True)
+    except Exception:
+        pass
+    return ""
+
+
+def enrich_job_descriptions(jobs: List[Dict], min_len: int = 600, should_stop=None) -> int:
+    """Troca a descrição curta do card pela completa — chamada DEPOIS do primeiro filtro,
+    só nas vagas que sobraram (menos requisições, menos risco de bloqueio). Retorna quantas
+    foram enriquecidas."""
+    done = 0
+    for j in jobs:
+        if should_stop and should_stop():
+            break
+        plat = j.get("platform", "")
+        if plat in _DETAIL_PLATFORMS and len(j.get("description") or "") < min_len:
+            full = fetch_jobposting_description(j.get("url", ""), plat)
+            if len(full) > len(j.get("description") or ""):
+                j["description"] = full
+                j["contact_email"] = j.get("contact_email") or extract_email(full)
+                done += 1
+            jitter_sleep(0.5, 0.3)
+    return done

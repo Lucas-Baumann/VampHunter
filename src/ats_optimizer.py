@@ -12,6 +12,7 @@ from reportlab.lib import colors
 from xml.sax.saxutils import escape as _xml_escape
 
 from config import Config
+from factcheck import check_generated
 from sanitize import sanitize_untrusted, minimal_cv_for_llm, scrub_generated_text
 
 SKILLS_IA_DIR = Config.BASE_DIR / "skills_ia"
@@ -197,8 +198,11 @@ brevemente o motivo. NÃO reescreva nada do currículo aqui.
 Responda EXATAMENTE no seguinte formato JSON (sem markdown de bloco de codigo):
 {{
   "match_score": 85,
-  "match_reason": "Breve justificativa dos pontos de aderencia."
+  "match_reason": "Breve justificativa dos pontos de aderencia.",
+  "dimensions": {{"skills": 80, "senioridade": 70, "localizacao_regime": 100, "idioma": 90}}
 }}
+Cada dimensao vai de 0 a 100 (skills = aderencia tecnica; senioridade = nivel pedido x nivel do candidato;
+localizacao_regime = local/remoto/presencial; idioma = exigencia de idiomas).
 """
     response_text = call_llm(prompt)
 
@@ -207,7 +211,18 @@ Responda EXATAMENTE no seguinte formato JSON (sem markdown de bloco de codigo):
             clean_json = response_text.replace("```json", "").replace("```", "").strip()
             parsed = json.loads(clean_json)
             score = max(0, min(100, int(parsed.get("match_score"))))
-            return score, parsed.get("match_reason", "Análise realizada."), "llm"
+            reason = str(parsed.get("match_reason") or "Análise realizada.")
+            dims = parsed.get("dimensions")
+            if isinstance(dims, dict):
+                parts = []
+                for k in ("skills", "senioridade", "localizacao_regime", "idioma"):
+                    try:
+                        parts.append(f"{k} {max(0, min(100, int(dims[k])))}")
+                    except Exception:
+                        pass
+                if parts:
+                    reason += " | " + " · ".join(parts)
+            return score, reason, "llm"
         except Exception as e:
             # resposta ilegível NÃO vira mais um "50" inventado: cai no heurístico, marcado como tal
             print(f"[ATS AI] Falha ao ler resposta JSON da IA (score): {e}")
@@ -297,6 +312,14 @@ Responda EXATAMENTE no seguinte formato JSON (sem markdown de bloco de codigo):
                 optimized_cv["skills"] = optimized_skills
             if "cover_letter" in parsed:
                 cover_letter = scrub_generated_text(parsed["cover_letter"], allowed=json.dumps(base_cv, ensure_ascii=False))
+            optimized_summary, optimized_skills, cover_letter, fc_issues = check_generated(
+                base_cv, job_description, optimized_summary, optimized_skills, cover_letter)
+            optimized_cv["summary"] = optimized_summary or base_cv.get("summary", "")
+            optimized_cv["skills"] = optimized_skills or base_cv.get("skills", [])
+            if not cover_letter.strip():
+                cover_letter = f"Prezada equipe da {company},\n\nTenho grande interesse na vaga de {job_title}. Anexo meu curriculo para apreciação.\n\nAtenciosamente,\n{base_cv.get('personal_info', {}).get('name')}"
+            for issue in fc_issues:
+                print(f"[ATS Fact-check] {issue}")
             try:
                 save_ats_cache(cache_key, score, reason, optimized_summary, json.dumps(optimized_skills, ensure_ascii=False), cover_letter)
             except Exception as e:
@@ -390,6 +413,13 @@ def _write_docs(job_id: int, company: str, optimized_cv: dict, cover_letter: str
     cover_filename = Config.OUTPUT_DIR / f"CoverLetter_{company_slug}_{job_id}.txt"
 
     generate_ats_pdf(optimized_cv, pdf_filename)
+    try:
+        from validator import check_pdf_content
+        missing = check_pdf_content(pdf_filename, optimized_cv)
+        if missing:
+            print(f"[ATS PDF] Atenção: o texto extraído do PDF não contém: {', '.join(missing)} (um ATS pode não ler esses campos).")
+    except Exception as e:
+        print(f"[ATS PDF] Validação do PDF indisponível: {e}")
     with open(cover_filename, 'w', encoding='utf-8') as f:
         f.write(cover_letter)
 
