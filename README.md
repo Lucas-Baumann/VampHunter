@@ -2,7 +2,7 @@
 
 [![Build & Release](https://github.com/Lucas-Baumann/VampHunter/actions/workflows/build.yml/badge.svg)](https://github.com/Lucas-Baumann/VampHunter/actions/workflows/build.yml)
 
-O **VampHunter** é uma solução completa em Python (GUI + CLI) criada para automatizar a busca de vagas (LinkedIn, Gupy e APIs abertas), otimizar seu currículo para passar pelos filtros automáticos (ATS) utilizando IA gratuita, realizar o envio de candidaturas e acompanhar o resultado de cada uma.
+O **VampHunter** é uma solução completa em Python (GUI + CLI) criada para automatizar a busca de vagas (Gupy, LinkedIn, Remotive, InfoJobs, Catho, Vagas.com, WeWorkRemotely, Programathor e GeekHunter), otimizar seu currículo para passar pelos filtros automáticos (ATS) utilizando IA gratuita, realizar o envio de candidaturas e acompanhar o resultado de cada uma.
 
 ![Dashboard do VampHunter](docs/screenshots/05_dashboard.png)
 
@@ -15,13 +15,13 @@ Baixe o executável pronto para o seu sistema na página de [**Releases**](https
 * **Windows** → `VampHunter-windows.exe`
 * **Linux** → `VampHunter-linux` (dê `chmod +x` antes de executar)
 
-Depois de baixar, veja a seção **"🛠️ Configuração"** mais abaixo — o executável lê `.env` e `curriculum_base.json` na mesma pasta onde ele estiver, e começa em branco se não encontrar nenhum dos dois.
+Depois de baixar, veja a seção **"🛠️ Configuração"** mais abaixo — o executável guarda `.env`, `curriculum_base.json` e `jobs.db` em `%LOCALAPPDATA%\VampHunter` (nunca ao lado do `.exe`) e começa em branco se não encontrar nada lá.
 
 ---
 
 ## 📌 Funcionalidades Principais
 
-1. **Coleta de Vagas (Gratuito):** busca automática na **Gupy**, **LinkedIn** e **Remotive**, sem dependência de APIs pagas.
+1. **Coleta de Vagas (Gratuito):** busca automática em **Gupy**, **LinkedIn**, **Remotive**, **InfoJobs**, **Catho**, **Vagas.com**, **WeWorkRemotely**, **Programathor** e **GeekHunter**, sem dependência de APIs pagas.
 2. **Otimização ATS por IA (Custo Zero):** avalia a aderência da vaga com seu perfil (% de match), reorganiza e reescreve seu currículo para destacar as palavras-chave da vaga (sem alterar a veracidade). Suporta **Gemini**, **OpenRouter** (com modelos `:free`), **Ollama** (100% local), além de OpenAI/Claude/Groq/endpoint próprio.
 3. **Geração Automática de Documentos:** PDF de currículo ATS-friendly e carta de apresentação personalizada por vaga, salvos em `output/`.
 4. **Envio / Candidatura:** por **e-mail (SMTP)** quando há contato do recrutador, ou automação via **Playwright** no LinkedIn/Gupy.
@@ -42,7 +42,7 @@ Dados pessoais, resumo, skills, experiências e formação. Botão **"Importar P
 ![Aba Currículo](docs/screenshots/01_curriculo.png)
 
 ### 2. Busca & Filtros
-Palavras-chave, modo de trabalho, salário mínimo, nível, empresas bloqueadas/favoritas, limite diário, Telegram, agendamento — ver tabela completa na seção **"🔍 Filtros de busca"** mais abaixo.
+Palavras-chave, modo de trabalho, salário mínimo, nível, empresas bloqueadas, limite diário, envio automático — ver tabela completa na seção **"🔍 Filtros de busca"** mais abaixo.
 
 ![Aba Busca & Filtros](docs/screenshots/02_busca.png)
 
@@ -103,7 +103,7 @@ A CLI lê as mesmas configurações salvas pela GUI (`.env`, `curriculum_base.js
 ## 🛠️ Configuração
 
 ### 1. Requisitos (rodando do código-fonte)
-* Python 3.10+
+* Python 3.12 (a versão usada no CI e no executável; 3.10+ costuma funcionar, mas não é testada)
 * Playwright (necessário para login real no LinkedIn — Posts de Recrutadores e Easy Apply). Instale com `pip install playwright && playwright install chromium`. No `.exe` empacotado (releases), o Chromium já vem embutido, sem precisar instalar nada — clique em "Fazer login" na aba 3 (abre um navegador real; o app nunca vê nem guarda sua senha, só a sessão).
 
 ### 2. Instalar dependências
@@ -156,17 +156,14 @@ cp curriculum_base.example.json curriculum_base.json
 | Salário mínimo | 0 (sem filtro) | Ignora vagas abaixo do valor informado |
 | Nível | indiferente | Júnior / Pleno / Sênior / indiferente |
 | Palavras obrigatórias / excluídas | vazio | Exige ou bloqueia vagas conforme termos na descrição |
-| Empresas bloqueadas / favoritas | vazio | Nunca ou sempre priorizar certas empresas |
+| Empresas bloqueadas | vazio | Nunca processa vagas dessas empresas (palavra inteira) |
 | Idade máxima da vaga | 0 (sem limite) | Ignora vagas publicadas há mais dias que isso |
 | Somente PCD | desativado | Filtra só vagas afirmativas para PCD |
 | Filtro de inglês | indiferente | Exige ou evita vagas que pedem inglês avançado |
 | Limite diário | 20 | Máximo de candidaturas/dia — evita bloqueio nas plataformas |
 | Envio automático | ativado | Se desativado, vagas ficam "prontas para enviar" até aprovação manual na aba Histórico |
 | Posts do LinkedIn | ativado | Também coleta posts de recrutadores como fonte extra de vagas |
-| Agendamento | desativado | Roda a automação sozinha em um horário fixo do dia — **a GUI precisa ficar aberta**; para rodar sem depender disso, use o Agendador de Tarefas/`cron` chamando `python main.py` diretamente (ver seção CLI) |
-| Telegram Bot Token / Chat ID | vazio | Notifica cada vaga processada por Telegram — ver abaixo |
 
-> **Telegram:** fale com [@BotFather](https://t.me/BotFather) no Telegram (comando `/newbot`) para gerar o token do bot. Para o Chat ID, envie qualquer mensagem para o bot e acesse `https://api.telegram.org/bot<TOKEN>/getUpdates` no navegador — o campo `chat.id` aparece na resposta.
 
 ---
 
@@ -219,16 +216,17 @@ job_auto_fit/
 ├── src/
 │   ├── gui.py                   # interface gráfica (7 abas)
 │   ├── main.py                   # pipeline CLI (coleta → filtro → ATS → envio → relatório)
-│   ├── collector.py              # coleta de vagas (Gupy, LinkedIn, Remotive)
+│   ├── collector.py              # coleta de vagas (Gupy, LinkedIn, Remotive, InfoJobs, Catho, Vagas.com e outras)
 │   ├── filters.py                # filtros de busca avançados
 │   ├── ats_optimizer.py          # match ATS + PDF/carta + cache de IA
 │   ├── importer.py               # parser de currículo (PDF/DOCX/TXT — heurístico + IA)
 │   ├── profile_generator.py      # geração/publicação de READMEs do GitHub
-│   ├── notify.py                 # notificações (desktop + Telegram)
+│   ├── notify.py                 # notificações (desktop; Telegram só se configurado no `.env`)
 │   ├── sender.py                 # envio de candidaturas (e-mail, Playwright)
 │   ├── db.py                     # SQLite (jobs.db) — histórico, cache, resultado
 │   └── config.py                 # .env + resolução de paths (dev vs. .exe empacotado)
 ├── tests/validar_projeto.py     # suíte de validação de ponta a ponta
+├── tests/test_regressions.py    # regressões sem rede/IA
 ├── VampHunter.spec               # build oficial do executável (PyInstaller)
 └── .github/workflows/build.yml  # CI: build Windows + Linux e release automática por tag
 ```

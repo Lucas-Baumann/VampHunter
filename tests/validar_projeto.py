@@ -40,11 +40,15 @@ except Exception as e:
 
 # 2. .env (não deve existir como arquivo real — só .env.example)
 try:
-    env_exists = (BASE/".env").exists()
-    if env_exists:
-        fail("ENV_PROTEC", ".env existe no repo (deveria ser ignorado)")
+    # o .env local é esperado em dev; o que não pode é ele estar VERSIONADO (git ls-files)
+    import subprocess
+    tracked = subprocess.run(["git", "ls-files", "--", ".env", "curriculum_base.json", "jobs.db", "search_config.json"],
+                             cwd=str(BASE), capture_output=True, text=True)
+    tracked_files = [l for l in tracked.stdout.splitlines() if l.strip()]
+    if tracked_files:
+        fail("ENV_PROTEC", f"arquivo sensivel versionado no git: {tracked_files}")
     else:
-        ok("ENV_PROTEC", ".env nao commitado (ok)")
+        ok("ENV_PROTEC", "nenhum arquivo sensivel versionado (ok)")
 except: pass
 
 # 3. Curriculum base
