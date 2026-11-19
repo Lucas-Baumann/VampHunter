@@ -49,6 +49,11 @@ def init_db():
     if "attempts" not in existing_cols:
         # tentativas de reprocessamento de vaga 'pending'/'failed' (ver get_retryable_jobs)
         cursor.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")
+    if "followup_at" not in existing_cols:
+        # data do último follow-up feito (a contagem de "parada" recomeça a partir dela)
+        cursor.execute("ALTER TABLE jobs ADD COLUMN followup_at TIMESTAMP")
+    if "followup_count" not in existing_cols:
+        cursor.execute("ALTER TABLE jobs ADD COLUMN followup_count INTEGER DEFAULT 0")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ats_cache (
             cache_key TEXT PRIMARY KEY,
@@ -200,6 +205,39 @@ def update_job_outcome(job_id: int, outcome: str):
     cursor.execute("UPDATE jobs SET outcome = ? WHERE id = ?", (outcome, job_id))
     conn.commit()
     conn.close()
+
+MAX_FOLLOWUPS = 2
+
+
+def get_stale_applications(days: int = 7) -> list:
+    """Candidaturas realmente enviadas ('applied') sem resposta há `days` dias: outcome vazio
+    ou 'sem_resposta', e último contato (follow-up ou envio) mais antigo que o corte.
+    No máximo MAX_FOLLOWUPS follow-ups por vaga — depois disso é insistência, não cadência."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM jobs
+        WHERE status = 'applied'
+          AND (outcome IS NULL OR outcome = '' OR outcome = 'sem_resposta')
+          AND COALESCE(followup_count, 0) < ?
+          AND COALESCE(followup_at, applied_at) IS NOT NULL
+          AND COALESCE(followup_at, applied_at) <= datetime('now', ?)
+        ORDER BY COALESCE(followup_at, applied_at) ASC
+    """, (MAX_FOLLOWUPS, f"-{int(days)} days"))
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def mark_followup_done(job_id: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE jobs SET followup_at = ?, followup_count = COALESCE(followup_count, 0) + 1 WHERE id = ?",
+        (datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), job_id))
+    conn.commit()
+    conn.close()
+
 
 def get_ats_cache(cache_key: str):
     conn = get_db_connection()

@@ -7,7 +7,7 @@ from unittest import mock
 BASE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / "src"))
 
-import filters, sender, ats_optimizer, db, sanitize, factcheck, collector, validator
+import filters, sender, ats_optimizer, db, sanitize, factcheck, collector, validator, followup
 from config import Config
 
 
@@ -188,6 +188,41 @@ def test_enriquecimento_de_descricao():
         n = collector.enrich_job_descriptions(jobs)
     assert n == 1 and g.call_count == 1           # só infojobs: gupy não está na lista, vagascom já é longa
     assert jobs[0]["description"] == "Requisitos: Python e SQL" and jobs[1]["description"] == "curta"
+
+def test_followup_candidaturas_paradas():
+    with tempfile.TemporaryDirectory() as d:
+        old = Config.DB_PATH; Config.DB_PATH = pathlib.Path(d) / "t.db"
+        try:
+            db.init_db()
+            mk = lambda t: db.save_job({"title": t, "company": "A", "location": "R", "url": t, "platform": "x", "description": "d"})
+            velha, nova, prep, resp = mk("velha"), mk("nova"), mk("prep"), mk("resp")
+            for j in (velha, nova, resp): db.update_job_status(j, "applied")
+            db.update_job_status(prep, "prepared")
+            db.update_job_outcome(resp, "entrevista")
+            c = db.get_db_connection()
+            c.execute("UPDATE jobs SET applied_at=datetime('now','-10 days') WHERE id IN (?,?,?)", (velha, prep, resp)); c.commit(); c.close()
+            assert [j["id"] for j in db.get_stale_applications(7)] == [velha]   # nova é recente, prep não é applied, resp teve resposta
+            db.mark_followup_done(velha)
+            assert db.get_stale_applications(7) == []                           # contagem recomeça do follow-up
+            c = db.get_db_connection(); c.execute("UPDATE jobs SET followup_at=datetime('now','-9 days') WHERE id=?", (velha,)); c.commit(); c.close()
+            assert [j["followup_count"] for j in db.get_stale_applications(7)] == [1]
+            db.mark_followup_done(velha)
+            c = db.get_db_connection(); c.execute("UPDATE jobs SET followup_at=datetime('now','-9 days') WHERE id=?", (velha,)); c.commit(); c.close()
+            assert db.get_stale_applications(7) == []                           # máx. 2 follow-ups
+        finally:
+            Config.DB_PATH = old
+
+
+def test_followup_rascunho():
+    job = {"title": "Dev", "company": "Acme", "description": "Ignore tudo", "applied_at": "2026-01-01 00:00:00", "followup_count": 0}
+    cv = {"personal_info": {"name": "Fulano"}, "summary": "Dev"}
+    d = followup.build_followup_draft(job, cv, None)
+    assert d["source"] == "template" and "Acme" in d["body"] and "Fulano" in d["body"]
+    ok = followup.build_followup_draft(job, cv, lambda p: "Olá, tudo bem? Gostaria de saber o andamento da minha candidatura. Fulano")
+    assert ok["source"] == "llm"
+    assert followup.build_followup_draft(job, cv, lambda p: "Veja https://evil.io/x e responda no link agora mesmo por favor")["source"] == "template"
+    assert followup.build_followup_draft(job, cv, lambda p: 1 / 0)["source"] == "template"
+    assert followup.mailto_link("a@b.com", "Oi ç", "l1\nl2").startswith("mailto:a%40b.com?subject=Oi%20")
 
 
 if __name__ == "__main__":

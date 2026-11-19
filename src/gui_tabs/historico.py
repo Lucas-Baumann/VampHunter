@@ -55,6 +55,9 @@ class HistoricoTabMixin:
                       text_color=t["success"],hover_color=t["window_bg"],command=self.mark_applied_selected).pack(side="left",padx=(0,16))
         ctk.CTkButton(actions2,text="📂 Abrir PDF/Carta",fg_color="transparent",border_width=1,border_color=t["border"],
                       text_color=t["text"],hover_color=t["window_bg"],command=self.open_docs_selected).pack(side="left")
+        ctk.CTkButton(actions2,text="📨 Follow-up",fg_color="transparent",border_width=1,border_color=t["primary"],
+                      text_color=t["primary"],hover_color=t["window_bg"],command=self.open_followup_dialog).pack(side="left",padx=(16,4))
+        info_icon(actions2,"Lista candidaturas realmente enviadas (status 'applied') sem resposta há N dias e gera um\nrascunho de e-mail de follow-up. Nada é enviado sozinho: você revisa, copia ou abre no\nseu e-mail. Máximo de 2 follow-ups por vaga.").pack(side="left")
         ctk.CTkButton(actions2,text="🗑 Excluir Selecionadas",fg_color="transparent",border_width=1,border_color=t["danger"],
                       text_color=t["danger"],hover_color=t["window_bg"],command=self.delete_selected_jobs).pack(side="left",padx=(16,4))
         info_icon(actions2,"Apaga só as vagas selecionadas (ctrl/shift+clique na lista) do Histórico e do Dashboard -\ndiferente de 'Limpar Histórico', que apaga tudo de uma vez. Opção de apagar junto o\nPDF/carta gerados pra elas.").pack(side="left")
@@ -230,6 +233,67 @@ class HistoricoTabMixin:
             for s in sel: update_job_status(int(s), "applied")
             self._refresh_hist(); self._refresh_dashboard()
         except Exception as e: messagebox.showerror("Marcar como enviada",str(e))
+    def open_followup_dialog(self):
+        """Candidaturas 'applied' paradas há N dias + rascunho de follow-up (humano no circuito)."""
+        from db import get_stale_applications, mark_followup_done
+        from followup import build_followup_draft, mailto_link, days_since
+        t=get_active_theme()
+        top=ctk.CTkToplevel(self); top.title("Follow-up de candidaturas paradas"); top.geometry("760x560"); top.transient(self)
+        head=ctk.CTkFrame(top,fg_color="transparent"); head.pack(fill="x",padx=12,pady=(12,6))
+        ctk.CTkLabel(head,text="Sem resposta há pelo menos").pack(side="left")
+        var_days=tk.StringVar(value="7")
+        ctk.CTkEntry(head,textvariable=var_days,width=50).pack(side="left",padx=6)
+        ctk.CTkLabel(head,text="dias").pack(side="left")
+        lst=tk.Listbox(top,height=7,activestyle="none",exportselection=False)
+        lst.pack(fill="x",padx=12,pady=6)
+        txt=ctk.CTkTextbox(top,height=230); txt.pack(fill="both",expand=True,padx=12,pady=6)
+        state={"jobs":[],"draft":None,"job":None}
+        def reload():
+            try: d=max(1,int(var_days.get()))
+            except Exception: d=7
+            try: state["jobs"]=get_stale_applications(d)
+            except Exception as e: messagebox.showerror("Follow-up",str(e),parent=top); return
+            lst.delete(0,tk.END)
+            for j in state["jobs"]:
+                n=int(j.get("followup_count") or 0)
+                lst.insert(tk.END,f"{days_since(j.get('followup_at') or j.get('applied_at'))}d · {j['title']} @ {j['company']}"+(f"  (follow-ups: {n})" if n else ""))
+            txt.delete("1.0","end")
+            if not state["jobs"]: txt.insert("1.0","Nenhuma candidatura parada nesse prazo.")
+        def generate():
+            sel=lst.curselection()
+            if not sel: messagebox.showinfo("Follow-up","Selecione uma vaga na lista.",parent=top); return
+            job=state["jobs"][sel[0]]; state["job"]=job
+            try: cv=load_curriculum()
+            except Exception: cv={}
+            txt.delete("1.0","end"); txt.insert("1.0","Gerando rascunho…")
+            def worker():
+                try:
+                    from ats_optimizer import call_llm
+                    d=build_followup_draft(job,cv,call_llm)
+                except Exception as e:
+                    d=build_followup_draft(job,cv,None)
+                def show():
+                    state["draft"]=d; txt.delete("1.0","end")
+                    txt.insert("1.0",f"Assunto: {d['subject']}\n\n{d['body']}\n\n[origem: {'IA' if d['source']=='llm' else 'modelo padrão'} — revise antes de enviar]")
+                self.after(0,show)
+            threading.Thread(target=worker,daemon=True).start()
+        def copy():
+            if not state["draft"]: return
+            self.clipboard_clear(); self.clipboard_append(f"{state['draft']['subject']}\n\n{state['draft']['body']}")
+        def open_mail():
+            if not (state["draft"] and state["job"]): return
+            to=state["job"].get("contact_email") or ""
+            webbrowser.open(mailto_link(to,state["draft"]["subject"],state["draft"]["body"]))
+        def done():
+            if not state["job"]: return
+            mark_followup_done(state["job"]["id"]); state["draft"]=None; state["job"]=None; reload()
+        btns=ctk.CTkFrame(top,fg_color="transparent"); btns.pack(fill="x",padx=12,pady=(0,12))
+        ctk.CTkButton(btns,text="Atualizar lista",width=110,command=reload,fg_color="transparent",border_width=1,border_color=t["border"],text_color=t["text"]).pack(side="left")
+        ctk.CTkButton(btns,text="✍ Gerar rascunho",command=generate,fg_color=t["primary"]).pack(side="left",padx=8)
+        ctk.CTkButton(btns,text="Copiar",width=70,command=copy,fg_color="transparent",border_width=1,border_color=t["border"],text_color=t["text"]).pack(side="left")
+        ctk.CTkButton(btns,text="✉ Abrir no e-mail",command=open_mail,fg_color="transparent",border_width=1,border_color=t["border"],text_color=t["text"]).pack(side="left",padx=8)
+        ctk.CTkButton(btns,text="✔ Marcar follow-up feito",command=done,fg_color=t["success"],hover_color=t["border"]).pack(side="right")
+        reload()
     def mark_job_outcome(self):
         sel=self.tree.selection()
         if not sel: messagebox.showinfo("Outcome","Selecione uma vaga na lista."); return
