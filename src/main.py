@@ -15,7 +15,7 @@ from notify import notify_all
 from logutil import log_print
 
 
-def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_posts=None, should_stop=None):
+def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_posts=None, should_stop=None, skip_ai_check=False):
     """Executa um ciclo completo: coleta -> filtros -> ATS -> envio -> relatório.
 
     Extraído de main() pra poder ser chamado tanto pela CLI quanto direto pela GUI quando
@@ -37,6 +37,24 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
     log_print(f"[*] Nota de Match Mínima: {min_score}%")
     log_print(f"[*] Provedor de IA: {Config.LLM_PROVIDER.upper()}")
     log_print("=" * 65)
+
+    # IA fora do ar (chave inválida, limite, modelo indisponível) fazia TODA vaga cair no score
+    # heurístico sem ninguém perceber — avisa já no início, com o motivo. A GUI já testa antes de
+    # chamar (skip_ai_check) pra não gastar duas chamadas da cota gratuita.
+    ai_ok = True
+    if not skip_ai_check:
+        import llm
+        ai_ok, ai_detail = llm.check_connection()
+        if ai_ok:
+            log_print(f"[IA] {Config.LLM_PROVIDER}: conexão ok.")
+        else:
+            log_print("!" * 65)
+            log_print(f"[IA] ATENÇÃO: a IA ({Config.LLM_PROVIDER}) não respondeu — {ai_detail}")
+            log_print("[IA] Esta execução usará só o score heurístico: sem currículo/carta personalizados")
+            log_print("[IA] e NENHUMA vaga será enviada automaticamente (ficam em 'ready_to_send').")
+            log_print("[IA] Corrija na aba 'IA & Conexões' (botão Testar Conexão).")
+            log_print("!" * 65)
+    heuristic_count = 0
 
     # 1. Inicializar Banco de Dados
     init_db()
@@ -157,6 +175,8 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
             cover_text = ats_res['cover_letter']
 
             score_source = ats_res.get('score_source', 'llm')
+            if score_source != 'llm':
+                heuristic_count += 1
             job['match_score'] = score
             job['match_reason'] = reason
             job['resume_pdf_path'] = pdf_path
@@ -229,6 +249,8 @@ def run_pipeline(keywords, location, min_score, dry_run=False, enable_linkedin_p
     log_print("\n" + "=" * 65)
     log_print("[+] CICLO DE AUTOMAÇÃO CONCLUÍDO COM SUCESSO!")
     log_print("=" * 65)
+    if heuristic_count:
+        log_print(f"[IA] ⚠ {heuristic_count} vaga(s) foram pontuadas SEM IA (heurístico) — o score delas é só uma estimativa por palavras-chave.")
     log_print(f"[*] Relatório HTML gerado em: {html_report_path}")
     log_print(f"[*] Relatório Markdown gerado em: {md_report_path}")
     log_print("=" * 65)
@@ -250,10 +272,11 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Apenas analisa e gera relatórios/PDFs sem enviar candidaturas")
     parser.add_argument("--enable-linkedin-posts", dest="enable_linkedin_posts", action="store_true", help="Ativa coleta de posts de recrutadores no LinkedIn")
     parser.add_argument("--disable-linkedin-posts", dest="enable_linkedin_posts", action="store_false", help="Desativa coleta de posts de recrutadores")
+    parser.add_argument("--skip-ai-check", action="store_true", help="Não testa a conexão com a IA no início (a GUI já testou)")
     parser.set_defaults(enable_linkedin_posts=None)
     args = parser.parse_args()
 
-    run_pipeline(args.keywords, args.location, args.min_score, dry_run=args.dry_run, enable_linkedin_posts=args.enable_linkedin_posts)
+    run_pipeline(args.keywords, args.location, args.min_score, dry_run=args.dry_run, enable_linkedin_posts=args.enable_linkedin_posts, skip_ai_check=args.skip_ai_check)
 
 
 if __name__ == "__main__":

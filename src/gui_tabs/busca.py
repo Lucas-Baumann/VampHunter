@@ -80,8 +80,11 @@ class BuscaTabMixin:
         w,_=field(content,"Excluir vagas que contenham (vírgula)",lambda p: ctk.CTkEntry(p,textvariable=self.var_exclude),
                    tooltip="Se título/descrição contiver qualquer termo aqui, vaga é descartada.\nEx: estágio, temporário, banco de talentos")
         w.pack(fill="x")
-        w,_=field(content,"Palavras obrigatórias (pelo menos uma, vírgula)",lambda p: ctk.CTkEntry(p,textvariable=self.var_mandatory),
-                   tooltip="Vaga só passa se contiver PELO MENOS UMA dessas palavras.\nNÃO é preenchido automaticamente — você define.\nDica: use 'Sugerir do currículo' para preencher com suas skills.")
+        w,_=field(content,"Palavras de relevância (vírgula)",lambda p: ctk.CTkEntry(p,textvariable=self.var_mandatory),
+                   tooltip="Cada palavra vale 3 pontos se estiver no TÍTULO da vaga e 1 ponto se só aparecer na descrição.\nA vaga precisa somar a 'Relevância mínima' abaixo.\nNÃO é preenchido automaticamente — você define.\nDica: use 'Sugerir do currículo' para preencher com suas skills.")
+        w.pack(fill="x",pady=(6,0))
+        w,_=field(content,"Relevância mínima (3 = uma palavra no título, ou 3 na descrição)",lambda p: CTkSpinbox(p,from_=1,to=12,textvariable=self.var_min_relevance,width=110),
+                   tooltip="Soma mínima de pontos das palavras acima.\n1 = basta uma palavra em qualquer lugar (comportamento antigo, deixa passar vaga irrelevante).\n3 = padrão: uma palavra no título, ou três palavras diferentes só na descrição.\nSe começar a cortar vaga boa, diminua; se passar muito lixo, aumente.")
         w.pack(fill="x",pady=(6,0))
         ctk.CTkButton(content,text="Sugerir do currículo (preenche com suas skills)",fg_color="transparent",
                       border_width=1,border_color=t["primary"],text_color=t["primary"],hover_color=t["card_bg"],

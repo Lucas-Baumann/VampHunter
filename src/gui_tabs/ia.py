@@ -110,6 +110,20 @@ class IATabMixin:
         ctk.CTkLabel(self.frame_custom,text="Custom Key",text_color=t["text_dim"]).pack(side="left",padx=(10,6))
         self.ent_custom_key=ctk.CTkEntry(self.frame_custom,textvariable=self.var_custom_key,show="*",width=160)
         self.ent_custom_key.pack(side="left")
+        # segunda linha: modelo + atalhos de provedores compatíveis com a API da OpenAI (sem código novo
+        # pra cada um — ver llm.PRESETS). O atalho só preenche a URL; chave e modelo são do usuário.
+        self.frame_custom2=ctk.CTkFrame(self.frame_ia_dynamic, fg_color="transparent")
+        ctk.CTkLabel(self.frame_custom2,text="Modelo",text_color=t["text_dim"]).pack(side="left",padx=(0,6))
+        self.ent_custom_model=ctk.CTkEntry(self.frame_custom2,textvariable=self.var_custom_model,width=260)
+        self.ent_custom_model.pack(side="left",padx=(0,6))
+        info_icon(self.frame_custom2, "Nome do modelo exatamente como o provedor publica (obrigatório na maioria).\nNVIDIA NIM: copie o nome em build.nvidia.com (ex: família nemotron).\nModelos gratuitos mudam de nome/disponibilidade — se der 404, confira a lista do provedor.").pack(side="left")
+        ctk.CTkLabel(self.frame_custom2,text="Atalho",text_color=t["text_dim"]).pack(side="left",padx=(10,6))
+        from llm import PRESETS
+        def _apply_preset(name):
+            if name in PRESETS: self.var_custom_url.set(PRESETS[name])
+        self.combo_custom_preset=ctk.CTkComboBox(self.frame_custom2,values=list(PRESETS.keys()),width=210,command=_apply_preset)
+        self.combo_custom_preset.set("Escolha para preencher a URL")
+        self.combo_custom_preset.pack(side="left")
 
         # trace para habilitar/desabilitar
         self.var_gemini_key.trace_add("write", lambda *_: self._update_ai_state())
@@ -229,9 +243,10 @@ class IATabMixin:
         if hasattr(self, 'ent_custom_url'):
             s2 = "normal" if p=="custom" else "disabled"
             self.ent_custom_url.configure(state=s2); self.ent_custom_key.configure(state=s2)
+            if hasattr(self, 'ent_custom_model'): self.ent_custom_model.configure(state=s2); self.combo_custom_preset.configure(state=s2)
         # mostra só frame do provider selecionado (dropdown único dinâmico)
         if hasattr(self, 'frame_gemini'):
-            for fr in [self.frame_gemini, self.frame_ollama, self.frame_openai, self.frame_claude, self.frame_groq, self.frame_openrouter, self.frame_custom]:
+            for fr in [self.frame_gemini, self.frame_ollama, self.frame_openai, self.frame_claude, self.frame_groq, self.frame_openrouter, self.frame_custom, self.frame_custom2]:
                 try: fr.pack_forget()
                 except: pass
             if p=="gemini": self.frame_gemini.pack(fill="x", pady=2)
@@ -240,7 +255,7 @@ class IATabMixin:
             elif p=="claude": self.frame_claude.pack(fill="x", pady=2)
             elif p=="groq": self.frame_groq.pack(fill="x", pady=2)
             elif p=="openrouter": self.frame_openrouter.pack(fill="x", pady=2)
-            elif p=="custom": self.frame_custom.pack(fill="x", pady=2)
+            elif p=="custom": self.frame_custom.pack(fill="x", pady=2); self.frame_custom2.pack(fill="x", pady=2)
         if hasattr(self, 'lbl_ai_status'):
             if ai_available:
                 self.lbl_ai_status.configure(text=f"✓ IA habilitada ({p}) — reestruturação ATS e carta com IA ativas", text_color=t["success"])
@@ -272,6 +287,14 @@ class IATabMixin:
                     # tenta fallback gemini flash free
                     messagebox.showerror("OpenRouter",f"{r.status_code}: {r.text[:400]}\nDica: verifique modelo :free e créditos em openrouter.ai/activity")
             except Exception as e: messagebox.showerror("OpenRouter",str(e))
+            return
+        if p!="gemini":
+            # demais provedores (custom/NIM, openai, claude, groq, ollama): salva o formulário e testa
+            # pelo mesmo caminho que a automação usa — mostra o motivo real da falha (chave, modelo, limite)
+            self.save_all(silent=True)
+            import llm
+            ok,detail=llm.check_connection()
+            (messagebox.showinfo if ok else messagebox.showerror)(p, "Conexão ok." if ok else f"Falhou: {detail}")
             return
         key=self.var_gemini_key.get().strip()
         if not key: messagebox.showwarning("Gemini","Informe a key"); return

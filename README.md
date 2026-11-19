@@ -125,7 +125,7 @@ Preencha pela GUI (aba 3) ou editando o arquivo diretamente. Referência complet
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | Chave gratuita do [Google AI Studio](https://aistudio.google.com/apikey) — modelo padrão `gemini-flash-latest` (alias que a Google atualiza sozinho; se der 404, confira o nome atual em [ai.google.dev/gemini-api/docs/models](https://ai.google.dev/gemini-api/docs/models)) |
 | `OPENROUTER_API_KEY` / `OPENROUTER_MODEL` | Chave da [OpenRouter](https://openrouter.ai/keys) — tem modelos gratuitos (sufixo `:free`) |
 | `OPENAI_API_KEY` / `CLAUDE_API_KEY` / `GROQ_API_KEY` | Provedores pagos alternativos (opcional) |
-| `CUSTOM_LLM_URL` / `CUSTOM_LLM_KEY` | Endpoint próprio compatível com a API da OpenAI (opcional) |
+| `CUSTOM_LLM_URL` / `CUSTOM_LLM_KEY` / `CUSTOM_LLM_MODEL` | Qualquer endpoint compatível com a API da OpenAI (NVIDIA NIM, DeepSeek, Mistral, Together...). Na GUI (aba 3, provedor `custom`) há atalhos que preenchem a URL; chave e modelo são seus |
 | `OLLAMA_HOST` / `OLLAMA_MODEL` | IA rodando localmente — grátis e sem enviar dados pra fora |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | Envio de candidaturas por e-mail — **ver nota abaixo** |
 | `GITHUB_TOKEN` | Token *classic* do GitHub, escopo `repo` — necessário só para a aba **Perfil GitHub** publicar direto |
@@ -155,7 +155,7 @@ cp curriculum_base.example.json curriculum_base.json
 | Limite por fonte | 8 | Máximo de vagas coletadas por plataforma a cada execução |
 | Salário mínimo | 0 (sem filtro) | Ignora vagas abaixo do valor informado |
 | Nível | indiferente | Júnior / Pleno / Sênior / indiferente |
-| Palavras obrigatórias / excluídas | vazio | Exige ou bloqueia vagas conforme termos na descrição |
+| Palavras de relevância / excluídas | vazio | Cada palavra de relevância vale 3 pontos no título da vaga e 1 na descrição; a vaga precisa somar a **Relevância mínima** (padrão 3). Excluídas bloqueiam a vaga |
 | Empresas bloqueadas | vazio | Nunca processa vagas dessas empresas (palavra inteira) |
 | Idade máxima da vaga | 0 (sem limite) | Ignora vagas publicadas há mais dias que isso |
 | Somente PCD | desativado | Filtra só vagas afirmativas para PCD |

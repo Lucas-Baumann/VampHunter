@@ -213,6 +213,10 @@ def parse_published_days(job: Dict) -> int | None:
             pass
     return None
 
+RELEVANCE_TITLE = 3   # pontos por palavra obrigatória encontrada no título
+RELEVANCE_BODY = 1    # pontos por palavra obrigatória encontrada só na descrição
+DEFAULT_MIN_RELEVANCE = 3
+
 def matches_filters(job: Dict, cfg: Dict) -> tuple[bool, str]:
     """
     cfg keys: min_salary, level, exclude_keywords[], max_age_days, only_pcd, english_filter
@@ -232,10 +236,22 @@ def matches_filters(job: Dict, cfg: Dict) -> tuple[bool, str]:
         if _contains_term(combined, kw):
             return False, f"excluir_keyword:{kw}"
 
-    # 2. Obrigatórias (pelo menos uma)
+    # 2. Relevância por peso (palavras obrigatórias): cada palavra vale 3 pontos se aparece no
+    # TÍTULO e 1 se só na descrição (palavra inteira). A vaga precisa somar `min_relevance`
+    # (padrão 3). Antes bastava UMA palavra em qualquer lugar — termos genéricos (HTML, Expo...)
+    # deixavam passar vaga de estacionamento e de degustadora.
     mand = [w for w in cfg.get("mandatory_words",[]) if w.strip()]
-    if mand and not any(w.lower() in combined for w in mand):
-        return False, "sem_palavra_obrigatoria"
+    if mand:
+        title_l = title.lower()
+        points = sum(RELEVANCE_TITLE if _contains_term(title_l, w) else (RELEVANCE_BODY if _contains_term(combined, w) else 0) for w in mand)
+        try:
+            min_rel = max(1, int(cfg.get("min_relevance", DEFAULT_MIN_RELEVANCE)))
+        except (TypeError, ValueError):
+            min_rel = DEFAULT_MIN_RELEVANCE
+        if points == 0:
+            return False, "sem_palavra_obrigatoria"
+        if points < min_rel:
+            return False, f"relevancia_baixa:{points}<{min_rel}"
 
     # 3. Empresas bloqueadas
     for b in cfg.get("blocked_companies",[]):

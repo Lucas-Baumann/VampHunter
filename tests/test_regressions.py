@@ -256,6 +256,40 @@ def test_historico_db_e_relatorio():
         finally:
             Config.DB_PATH = old
 
+def test_relevancia_por_peso():
+    cfg = {"mandatory_words": ["React", "Expo", "HTML", "CSS"], "min_relevance": 3}
+    mk = lambda t, d: {"title": t, "description": d, "company": "X", "location": "Remoto"}
+    # o caso real da auditoria: "expo center" na descrição NÃO basta (1 ponto)
+    ok, why = filters.matches_filters(mk("Operador de estacionamento", "Estacionamento do Expo Center Norte"), cfg)
+    assert not ok and why == "relevancia_baixa:1<3"
+    assert not filters.matches_filters(mk("Product Designer", "domínio de HTML e CSS"), cfg)[0]       # 2 pontos
+    assert filters.matches_filters(mk("Desenvolvedor React Native", ""), cfg)[0]                      # título = 3
+    assert filters.matches_filters(mk("Dev Front", "React, HTML e CSS no dia a dia"), cfg)[0]         # 3 na descrição
+    assert filters.matches_filters(mk("Dev", "nada a ver"), cfg) == (False, "sem_palavra_obrigatoria")
+    assert filters.matches_filters(mk("Dev", "só Expo"), {**cfg, "min_relevance": 1})[0]               # limiar 1 = comportamento antigo
+    assert not filters.matches_filters(mk("Dev", "reactivate"), {"mandatory_words": ["React"], "min_relevance": 1})[0]  # palavra inteira
+
+
+def test_llm_diagnostico_e_provedores():
+    old = (Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL)
+    try:
+        Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL = "custom", "", "", ""
+        assert llm.ai_configured() is False
+        assert llm.check_connection() == (False, "nenhuma chave configurada para 'custom'")
+        # NVIDIA NIM (ou qualquer compatível com OpenAI) pelo provedor custom, com modelo próprio
+        Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL = llm.PRESETS["NVIDIA NIM (build.nvidia.com)"], "nvapi-x", "nvidia/modelo-x"
+        ok = mock.Mock(status_code=200, json=lambda: {"choices": [{"message": {"content": "OK"}}]})
+        with mock.patch.object(llm.requests, "post", return_value=ok) as post:
+            assert llm.check_connection() == (True, "ok")
+        assert post.call_args.kwargs["json"]["model"] == "nvidia/modelo-x" and "integrate.api.nvidia.com" in post.call_args.args[0]
+        # chave inválida: o motivo aparece em vez de um "IA falhou" genérico
+        bad = mock.Mock(status_code=401, text="Missing Authentication header")
+        with mock.patch.object(llm.requests, "post", return_value=bad):
+            ok_, why = llm.check_connection()
+        assert not ok_ and "401" in why and "chave inválida" in why
+    finally:
+        Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL = old
+
 
 if __name__ == "__main__":
     fails = 0

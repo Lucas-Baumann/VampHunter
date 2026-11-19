@@ -128,7 +128,40 @@ class ExecucaoTabMixin:
             # específica no log, sem entender de onde veio. Agora bloqueia igual à validação
             # de nome acima, em vez de inventar uma palavra-chave que ninguém pediu.
             messagebox.showwarning("Validação","Informe ao menos uma palavra-chave de busca"); self.nb.select(self.tab_busca); return
-        self.save_all(silent=True); self.btn_run.configure(state="disabled"); self.progress.start(12); self._log("\n=== Iniciando ===")
+        self.save_all(silent=True)
+        # Testa a IA ANTES de gastar a busca: chave inválida/limite/modelo fora do ar fazia toda
+        # vaga cair no score heurístico sem aviso. IA não configurada (campo opcional) segue direto.
+        self.btn_run.configure(state="disabled")
+        try:
+            import llm
+            configured = llm.ai_configured()
+        except Exception:
+            configured = False
+        if not configured:
+            self._start_automation(kws, ai_checked=False); return
+        t = get_active_theme()
+        self.lbl_exec_ai.configure(text="Testando a conexão com a IA…", text_color=t["text_dim"])
+        def _check():
+            try: ok, detail = llm.check_connection()
+            except Exception as e: ok, detail = False, str(e)
+            self.after(0, lambda: self._after_ai_check(ok, detail, kws))
+        threading.Thread(target=_check, daemon=True).start()
+    def _after_ai_check(self, ok, detail, kws):
+        t = get_active_theme()
+        if ok:
+            self.lbl_exec_ai.configure(text=f"IA pronta ({self.var_llm_provider.get()}) — conexão testada agora", text_color=t["success"])
+            self._start_automation(kws, ai_checked=True); return
+        self.lbl_exec_ai.configure(text=f"✗ IA não respondeu — {detail}", text_color=t["danger"])
+        if messagebox.askyesno("IA indisponível",
+            f"A IA ({self.var_llm_provider.get()}) não respondeu:\n{detail}\n\n"
+            "Sem IA a execução usa só o score heurístico (estimativa por palavras-chave): não gera\n"
+            "currículo/carta personalizados e nenhuma vaga é enviada automaticamente.\n\n"
+            "Executar mesmo assim?\n(Para corrigir: aba 'IA & Conexões' → Testar Conexão)", icon="warning"):
+            self._start_automation(kws, ai_checked=True)
+        else:
+            self.btn_run.configure(state="normal"); self.nb.select(self.tab_ia)
+    def _start_automation(self, kws, ai_checked=False):
+        self.progress.start(12); self._log("\n=== Iniciando ===")
         loc="Brasil" if self.var_work_mode.get()=="remoto" else (self.var_presencial_loc.get().strip() or "Brasil")
         min_score=int(self.var_min_score.get()); dry_run=bool(self.var_dry_run.get())
         self.proc=None; self.stop_requested=False
@@ -151,11 +184,12 @@ class ExecucaoTabMixin:
                                 self.log_fn(line)
                         def flush(self): pass
                     with contextlib.redirect_stdout(_LogStream(self._log)):
-                        run_pipeline(kws, loc, min_score, dry_run=dry_run, should_stop=lambda: self.stop_requested)
+                        run_pipeline(kws, loc, min_score, dry_run=dry_run, should_stop=lambda: self.stop_requested, skip_ai_check=ai_checked)
                     self._log("\n=== Finalizado ===" if not self.stop_requested else "\n=== Parado ===")
                 else:
                     cmd=[sys.executable,str(BASE_DIR/"main.py"),"--keywords",*kws,"--location",loc,"--min-score",str(min_score)]
                     if dry_run: cmd.append("--dry-run")
+                    if ai_checked: cmd.append("--skip-ai-check")
                     self._log(f"Comando: {' '.join(cmd)}")
                     self.proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding="utf-8",errors="replace",cwd=str(BASE_DIR))
                     for line in self.proc.stdout:
