@@ -43,11 +43,13 @@ class App(tb.Window, PerfilTabMixin, BuscaTabMixin, IATabMixin, ExecucaoTabMixin
             self.iconbitmap(default=str(resource_path("icon_taskbar.ico")))
         except Exception:
             pass
-        self.minsize(1200,750)
         # centraliza na tela - antes sempre abria no canto superior esquerdo (posição
         # default do SO), independente do tamanho/resolução do monitor.
-        _w,_h=1280,820
         self.update_idletasks()
+        # nunca maior que a tela (tela baixa / escala do Windows): senão o rodapé ("Salvar Tudo")
+        # fica para fora e a minsize fixa impedia a janela de caber.
+        _w=min(1280,self.winfo_screenwidth()-40); _h=min(820,self.winfo_screenheight()-100)
+        self.minsize(min(1200,_w),min(750,_h))
         _x=(self.winfo_screenwidth()-_w)//2; _y=(self.winfo_screenheight()-_h)//2
         self.geometry(f"{_w}x{_h}+{max(0,_x)}+{max(0,_y)}")
         self.curriculum=load_curriculum(); self.env=load_env_dict(); self.search_cfg=load_search_config()

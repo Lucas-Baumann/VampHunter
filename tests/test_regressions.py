@@ -385,6 +385,34 @@ def test_modelrank_timeout_disjuntor_e_teto():
     # o teste não deixa timeout curto/sem retry vazando pro uso normal
     assert llm.REQUEST_TIMEOUT == 45 and llm.RETRIES_ENABLED is True
 
+def test_gui_aba_ia_reage_a_chave_custom_e_salva_apos_ranking():
+    """Monta a janela DE VERDADE (o validar_projeto só importa a classe). Sem display, pula."""
+    import tkinter, tkinter.messagebox
+    try:
+        import gui as G
+        app = G.App()
+    except tkinter.TclError:
+        return
+    try:
+        app.update()
+        app.var_llm_provider.set("custom"); app.update()
+        assert str(app.btn_test_gemini.cget("state")) == "disabled"
+        app.var_custom_url.set("https://integrate.api.nvidia.com/v1/chat/completions")
+        app.var_custom_key.set("nvapi-teste"); app.update()
+        # regressão: colar URL+chave do custom não atualizava o botão Testar Conexão nem o status
+        assert str(app.btn_test_gemini.cget("state")) == "normal" and "habilitada" in app.lbl_ai_status.cget("text")
+        # fim do ranking: preenche principal + reservas e salva sozinho (não depende do rodapé)
+        res = [{"model": f"m{i}", "nota": 90 - i, "formato": 100, "erro_medio": 3.0, "mediana_s": 1.0} for i in range(5)]
+        with mock.patch.object(tkinter.messagebox, "showinfo"), mock.patch.object(app, "save_all") as save:
+            app._discover_done(res)
+        assert app.var_custom_model.get() == "m0" and app.var_custom_models.get() == "m1,m2,m3,m4"
+        save.assert_called_once_with(silent=True)
+        assert "Já salvo" in app.lbl_discover.cget("text")
+        # a janela nunca passa da tela (senão o rodapé com Salvar Tudo some)
+        assert app.winfo_height() <= app.winfo_screenheight() and app.winfo_width() <= app.winfo_screenwidth()
+    finally:
+        app.destroy()
+
 
 if __name__ == "__main__":
     fails = 0

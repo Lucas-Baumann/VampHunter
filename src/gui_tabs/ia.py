@@ -37,6 +37,7 @@ class IATabMixin:
         info_icon(row_prov, "Escolha a IA que reescreve seu currículo/Carta para o ATS.\n• gemini = gratuito (aistudio.google.com)\n• ollama = local gratuito\n• openai/claude/groq = pago\n• openrouter = free tier (openrouter.ai/keys) :free").pack(side="left")
         self.btn_test_gemini=_outline_btn(row_prov,"Testar Conexão",t,"success",command=self.test_gemini)
         self.btn_test_gemini.pack(side="left",padx=(10,0))
+        _outline_btn(row_prov,"💾 Salvar",t,"primary",width=90,command=lambda: self.save_all()).pack(side="left",padx=(8,0))
         self.lbl_ai_status=ctk.CTkLabel(content,text="",font=ctk.CTkFont(size=11,weight="bold"),anchor="w")
         self.lbl_ai_status.pack(fill="x",pady=(8,0))
         ctk.CTkLabel(content,text="Gemini gratuito: aistudio.google.com/app/apikey — deixe em branco para heurístico.",
@@ -126,6 +127,7 @@ class IATabMixin:
         self.combo_custom_preset.pack(side="left")
         # terceira linha: descoberta automática dos melhores modelos do provedor (ver modelrank.py)
         self.frame_custom3=ctk.CTkFrame(self.frame_ia_dynamic, fg_color="transparent")
+        self._discover_cancel=False
         self.btn_discover=_outline_btn(self.frame_custom3,"🔎 Descobrir melhores modelos",t,"primary",command=self.discover_models)
         self.btn_discover.pack(side="left",padx=(0,6))
         info_icon(self.frame_custom3,"Com a URL e a chave preenchidas: lista os modelos do provedor, testa quais\nrespondem no seu plano e avalia cada um em vagas de exemplo (fictícias — nada\nseu é enviado). Os 5 melhores viram o modelo principal + reservas automáticas.\nLeva alguns minutos (planos gratuitos limitam ~40 requisições/min).").pack(side="left")
@@ -138,6 +140,8 @@ class IATabMixin:
         self.var_gemini_key.trace_add("write", lambda *_: self._update_ai_state())
         self.var_openrouter_key.trace_add("write", lambda *_: self._update_ai_state())
         self.var_llm_provider.trace_add("write", lambda *_: self._update_ai_state())
+        for _v in (self.var_openai_key, self.var_claude_key, self.var_groq_key, self.var_custom_url, self.var_custom_key):
+            _v.trace_add("write", lambda *_: self._update_ai_state())
         self.after(300, self._update_ai_state)
 
         outer, content2 = card(inner, "E-mail SMTP (envio automático, opcional)")
@@ -332,9 +336,14 @@ class IATabMixin:
             self.lbl_discover.configure(text="✗ Nenhum modelo respondeu — confira a chave e a URL (botão Testar Conexão mostra o motivo).",text_color=t["danger"]); return
         self.var_custom_model.set(res[0]["model"])
         self.var_custom_models.set(",".join(r["model"] for r in res[1:]))
-        self.lbl_discover.configure(text=f"✓ Principal: {res[0]['model']} (nota {res[0]['nota']}) + {len(res)-1} reserva(s). Clique em Salvar Tudo.",text_color=t["success"])
+        self._update_ai_state()
+        try:
+            self.save_all(silent=True); salvo=True
+        except Exception:
+            salvo=False
+        self.lbl_discover.configure(text=f"✓ Principal: {res[0]['model']} (nota {res[0]['nota']}) + {len(res)-1} reserva(s). "+("Já salvo." if salvo else "Clique em Salvar."),text_color=t["success"])
         linhas="\n".join(f"{i}. {r['model']}\n    nota {r['nota']}  ·  formato {r['formato']}%  ·  erro médio {r['erro_medio']} pts  ·  {r['mediana_s']}s/vaga" for i,r in enumerate(res,1))
-        messagebox.showinfo("Melhores modelos",f"Ranking (vagas de exemplo):\n\n{linhas}\n\nO 1º virou o modelo principal e os demais, reservas automáticas.\nClique em 'Salvar Tudo' para guardar.")
+        messagebox.showinfo("Melhores modelos",f"Ranking (vagas de exemplo):\n\n{linhas}\n\nO 1º virou o modelo principal e os demais, reservas automáticas.\n"+("Já salvo — use 'Testar Conexão' para conferir." if salvo else "Clique em 'Salvar' para guardar."))
 
     def test_gemini(self):
         p=self.var_llm_provider.get()
