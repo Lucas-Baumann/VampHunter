@@ -124,6 +124,15 @@ class IATabMixin:
         self.combo_custom_preset=ctk.CTkComboBox(self.frame_custom2,values=list(PRESETS.keys()),width=210,command=_apply_preset)
         self.combo_custom_preset.set("Escolha para preencher a URL")
         self.combo_custom_preset.pack(side="left")
+        # terceira linha: descoberta automática dos melhores modelos do provedor (ver modelrank.py)
+        self.frame_custom3=ctk.CTkFrame(self.frame_ia_dynamic, fg_color="transparent")
+        self.btn_discover=_outline_btn(self.frame_custom3,"🔎 Descobrir melhores modelos",t,"primary",command=self.discover_models)
+        self.btn_discover.pack(side="left",padx=(0,6))
+        info_icon(self.frame_custom3,"Com a URL e a chave preenchidas: lista os modelos do provedor, testa quais\nrespondem no seu plano e avalia cada um em vagas de exemplo (fictícias — nada\nseu é enviado). Os 5 melhores viram o modelo principal + reservas automáticas.\nLeva alguns minutos (planos gratuitos limitam ~40 requisições/min).").pack(side="left")
+        self.btn_discover_stop=_outline_btn(self.frame_custom3,"Parar",t,"danger",width=70,command=self._discover_stop,state="disabled")
+        self.btn_discover_stop.pack(side="left",padx=(10,0))
+        self.lbl_discover=ctk.CTkLabel(self.frame_custom3,text="",font=ctk.CTkFont(size=11),text_color=t["text_dim"],anchor="w")
+        self.lbl_discover.pack(side="left",padx=(10,0),fill="x",expand=True)
 
         # trace para habilitar/desabilitar
         self.var_gemini_key.trace_add("write", lambda *_: self._update_ai_state())
@@ -246,7 +255,7 @@ class IATabMixin:
             if hasattr(self, 'ent_custom_model'): self.ent_custom_model.configure(state=s2); self.combo_custom_preset.configure(state=s2)
         # mostra só frame do provider selecionado (dropdown único dinâmico)
         if hasattr(self, 'frame_gemini'):
-            for fr in [self.frame_gemini, self.frame_ollama, self.frame_openai, self.frame_claude, self.frame_groq, self.frame_openrouter, self.frame_custom, self.frame_custom2]:
+            for fr in [self.frame_gemini, self.frame_ollama, self.frame_openai, self.frame_claude, self.frame_groq, self.frame_openrouter, self.frame_custom, self.frame_custom2, self.frame_custom3]:
                 try: fr.pack_forget()
                 except: pass
             if p=="gemini": self.frame_gemini.pack(fill="x", pady=2)
@@ -255,7 +264,7 @@ class IATabMixin:
             elif p=="claude": self.frame_claude.pack(fill="x", pady=2)
             elif p=="groq": self.frame_groq.pack(fill="x", pady=2)
             elif p=="openrouter": self.frame_openrouter.pack(fill="x", pady=2)
-            elif p=="custom": self.frame_custom.pack(fill="x", pady=2); self.frame_custom2.pack(fill="x", pady=2)
+            elif p=="custom": self.frame_custom.pack(fill="x", pady=2); self.frame_custom2.pack(fill="x", pady=2); self.frame_custom3.pack(fill="x", pady=2)
         if hasattr(self, 'lbl_ai_status'):
             if ai_available:
                 self.lbl_ai_status.configure(text=f"✓ IA habilitada ({p}) — reestruturação ATS e carta com IA ativas", text_color=t["success"])
@@ -270,6 +279,50 @@ class IATabMixin:
                 self.lbl_exec_ai.configure(text=f"IA pronta ({p}) — currículos serão reestruturados com palavras-chave da vaga", text_color=t["success"])
             else:
                 self.lbl_exec_ai.configure(text="IA desabilitada — execução usará heurístico (sem reestruturação por IA). Preencha a chave para habilitar.", text_color=t["text_dim"])
+
+    def _discover_stop(self):
+        self._discover_cancel=True
+        self.btn_discover_stop.configure(state="disabled")
+        self.lbl_discover.configure(text="Cancelando…")
+
+    def discover_models(self):
+        """Lista os modelos do provedor custom, testa quais respondem e ranqueia (modelrank.py)."""
+        url=self.var_custom_url.get().strip(); key=self.var_custom_key.get().strip()
+        if not url or not key:
+            messagebox.showwarning("Descobrir modelos","Preencha a URL (use o Atalho) e a chave primeiro."); return
+        t=get_active_theme()
+        self._discover_cancel=False
+        self.btn_discover.configure(state="disabled"); self.btn_discover_stop.configure(state="normal")
+        self.lbl_discover.configure(text="Começando…",text_color=t["text_dim"])
+        def progress(msg):
+            self.after(0, lambda: self.lbl_discover.configure(text=msg))
+        def worker():
+            try:
+                import modelrank
+                res=modelrank.rank_models(url,key,progress=progress,should_stop=lambda: self._discover_cancel)
+                self.after(0, lambda: self._discover_done(res))
+            except Exception as e:
+                msg=str(e)
+                self.after(0, lambda: self._discover_fail(msg))
+        threading.Thread(target=worker,daemon=True).start()
+
+    def _discover_fail(self,msg):
+        t=get_active_theme()
+        self.btn_discover.configure(state="normal"); self.btn_discover_stop.configure(state="disabled")
+        self.lbl_discover.configure(text=f"✗ {msg}",text_color=t["danger"])
+
+    def _discover_done(self,res):
+        t=get_active_theme()
+        self.btn_discover.configure(state="normal"); self.btn_discover_stop.configure(state="disabled")
+        if self._discover_cancel:
+            self.lbl_discover.configure(text="Cancelado.",text_color=t["text_dim"]); return
+        if not res:
+            self.lbl_discover.configure(text="✗ Nenhum modelo respondeu — confira a chave e a URL (botão Testar Conexão mostra o motivo).",text_color=t["danger"]); return
+        self.var_custom_model.set(res[0]["model"])
+        self.var_custom_models.set(",".join(r["model"] for r in res[1:]))
+        self.lbl_discover.configure(text=f"✓ Principal: {res[0]['model']} (nota {res[0]['nota']}) + {len(res)-1} reserva(s). Clique em Salvar Tudo.",text_color=t["success"])
+        linhas="\n".join(f"{i}. {r['model']}\n    nota {r['nota']}  ·  formato {r['formato']}%  ·  erro médio {r['erro_medio']} pts  ·  {r['mediana_s']}s/vaga" for i,r in enumerate(res,1))
+        messagebox.showinfo("Melhores modelos",f"Ranking (vagas de exemplo):\n\n{linhas}\n\nO 1º virou o modelo principal e os demais, reservas automáticas.\nClique em 'Salvar Tudo' para guardar.")
 
     def test_gemini(self):
         p=self.var_llm_provider.get()

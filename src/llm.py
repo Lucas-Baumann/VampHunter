@@ -148,7 +148,20 @@ def call_llm(prompt: str) -> str:
                 break  # chave inválida/sem permissão vale pra TODOS os modelos — não adianta tentar os de reserva
         return _fail("OpenRouter: todos os modelos falharam — " + (errors[0] if errors else "sem detalhe"))
     if provider == "custom" and Config.CUSTOM_LLM_URL and Config.CUSTOM_LLM_KEY:
-        return _call_openai_compat(prompt, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_MODEL or "default")
+        # modelo principal + cadeia de reserva (os melhores achados pela GUI): se um falha
+        # (fora do ar, limite, saiu da lista gratuita), tenta o próximo em vez de cair no heurístico
+        chain, seen = [], set()
+        for m in [Config.CUSTOM_LLM_MODEL] + list(Config.CUSTOM_LLM_MODELS):
+            if m and m not in seen:
+                seen.add(m)
+                chain.append(m)
+        for m in (chain or ["default"]):
+            out = _call_openai_compat(prompt, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_URL, m)
+            if out:
+                return out
+            if "HTTP 401" in last_error or "HTTP 403" in last_error:
+                break  # chave inválida vale pra todos os modelos
+        return ""
 
     if provider == "ollama" or not any([Config.GEMINI_API_KEY, Config.OPENAI_API_KEY, Config.CLAUDE_API_KEY, Config.GROQ_API_KEY, Config.OPENROUTER_API_KEY, Config.CUSTOM_LLM_KEY]):
         try:

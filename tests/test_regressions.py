@@ -7,7 +7,7 @@ from unittest import mock
 BASE = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE / "src"))
 
-import filters, sender, ats_optimizer, db, sanitize, factcheck, collector, validator, followup, llm, report
+import filters, sender, ats_optimizer, db, sanitize, factcheck, collector, validator, followup, llm, report, modelrank
 from config import Config
 
 
@@ -289,6 +289,62 @@ def test_llm_diagnostico_e_provedores():
         assert not ok_ and "401" in why and "chave inválida" in why
     finally:
         Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL = old
+
+def test_modelrank_filtro_e_listagem():
+    assert modelrank.models_url("https://integrate.api.nvidia.com/v1/chat/completions") == "https://integrate.api.nvidia.com/v1/models"
+    for ruim in ("nvidia/nv-embedqa-mistral-7b-v2", "nvidia/nemotron-3.5-embed-8b", "nvidia/llama-3.1-nemoguard-8b-topic-control",
+                 "nvidia/nemotron-3.5-content-safety", "nvidia/riva-translate-4b-instruct-v2", "bigcode/starcoder2-15b",
+                 "nvidia/nvclip", "nvidia/cosmos-reason2-8b"):
+        assert not modelrank.is_text_candidate(ruim), ruim
+    for bom in ("nvidia/nemotron-3.5-lightning-30b-a3b", "google/gemma-4-31b-it", "mistralai/mistral-large-4-1t-a52b", "z-ai/glm-5.3-flash"):
+        assert modelrank.is_text_candidate(bom), bom
+    resp = mock.Mock(status_code=200, json=lambda: {"data": [{"id": "a/chat-1"}, {"id": "a/embed-1"}, {"id": "b/chat-2"}]})
+    with mock.patch.object(modelrank.requests, "get", return_value=resp):
+        assert modelrank.list_models("https://x/v1/chat/completions", "k") == ["a/chat-1", "b/chat-2"]
+    with mock.patch.object(modelrank.requests, "get", return_value=mock.Mock(status_code=401, text="no")):
+        try:
+            modelrank.list_models("https://x/v1/chat/completions", "k"); assert False
+        except RuntimeError as e:
+            assert "401" in str(e)
+
+
+def test_modelrank_ranking_e_cadeia_de_reserva():
+    ref = {j[0]: j[3] for j in modelrank.DEMO_JOBS}
+    def fake_eval(modelo_bom):
+        def ev(title, company, desc, cv):
+            m = Config.CUSTOM_LLM_MODEL            # o override aponta pro modelo em teste
+            if m == "sem-acesso": return 40, "x", "heuristic"
+            if m == "bom": return ref[title], "ok", "llm"
+            return min(100, ref[title] + 40), "ok", "llm"   # "ruim": erra por 40 pontos
+        return ev
+    def fake_llm(prompt):
+        return "" if Config.CUSTOM_LLM_MODEL == "sem-acesso" else "OK"
+    import ats_optimizer
+    with mock.patch.object(ats_optimizer, "evaluate_match_score", side_effect=fake_eval(None)), \
+         mock.patch.object(llm, "call_llm", side_effect=fake_llm), mock.patch.object(modelrank.time, "sleep"):
+        res = modelrank.rank_models("https://x/v1/chat/completions", "k", models=["ruim", "sem-acesso", "bom"], top=5)
+    assert [r["model"] for r in res] == ["bom", "ruim"]            # sem acesso é descartado no ping
+    assert res[0]["nota"] > res[1]["nota"] and res[0]["erro_medio"] == 0
+    # nada vaza pro Config depois do teste
+    assert Config.LLM_PROVIDER != "custom" or Config.CUSTOM_LLM_MODEL != "bom"
+
+    # cadeia de reserva: o 1º modelo falha, o 2º responde
+    old = (Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL, Config.CUSTOM_LLM_MODELS)
+    try:
+        Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL, Config.CUSTOM_LLM_MODELS = "custom", "https://x/v1/chat/completions", "k", "m1", ["m2", "m1", "m3"]
+        usados = []
+        def post(url, **kw):
+            usados.append(kw["json"]["model"])
+            return mock.Mock(status_code=404, text="gone") if kw["json"]["model"] == "m1" else mock.Mock(status_code=200, json=lambda: {"choices": [{"message": {"content": "resposta"}}]})
+        with mock.patch.object(llm.requests, "post", side_effect=post):
+            assert llm.call_llm("oi") == "resposta"
+        assert usados == ["m1", "m2"]                               # ordem + sem repetir m1 + para no 1º que responde
+        usados.clear()
+        with mock.patch.object(llm.requests, "post", side_effect=lambda url, **kw: (usados.append(kw["json"]["model"]), mock.Mock(status_code=401, text="x"))[1]):
+            assert llm.call_llm("oi") == ""
+        assert usados == ["m1"]                                     # 401 = chave ruim, não tenta os outros
+    finally:
+        Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL, Config.CUSTOM_LLM_MODELS = old
 
 
 if __name__ == "__main__":

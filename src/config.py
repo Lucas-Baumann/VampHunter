@@ -121,6 +121,8 @@ class Config:
     CUSTOM_LLM_URL = os.getenv("CUSTOM_LLM_URL", "")
     CUSTOM_LLM_KEY = os.getenv("CUSTOM_LLM_KEY", "")
     CUSTOM_LLM_MODEL = os.getenv("CUSTOM_LLM_MODEL", "")  # obrigatório na maioria dos provedores (ex: NVIDIA NIM)
+    # cadeia de reserva do provedor custom (os "5 melhores" achados pelo botão Descobrir melhores modelos)
+    CUSTOM_LLM_MODELS = [m.strip() for m in os.getenv("CUSTOM_LLM_MODELS", "").split(",") if m.strip()]
 
     # SMTP
     SMTP_HOST = os.getenv("SMTP_HOST") or "smtp.gmail.com"

@@ -83,6 +83,7 @@ class App(tb.Window, PerfilTabMixin, BuscaTabMixin, IATabMixin, ExecucaoTabMixin
         self.var_custom_url=tk.StringVar(value=self.env.get("CUSTOM_LLM_URL",""))
         self.var_custom_key=tk.StringVar(value=self.env.get("CUSTOM_LLM_KEY",""))
         self.var_custom_model=tk.StringVar(value=self.env.get("CUSTOM_LLM_MODEL",""))
+        self.var_custom_models=tk.StringVar(value=self.env.get("CUSTOM_LLM_MODELS",""))
         self.var_smtp_host=tk.StringVar(value=self.env.get("SMTP_HOST","smtp.gmail.com"))
         self.var_smtp_port=tk.StringVar(value=self.env.get("SMTP_PORT","587"))
         self.var_smtp_user=tk.StringVar(value=self.env.get("SMTP_USER",""))
@@ -280,7 +281,7 @@ class App(tb.Window, PerfilTabMixin, BuscaTabMixin, IATabMixin, ExecucaoTabMixin
     def save_all(self,silent=False):
         self.curriculum["personal_info"]={"name":self.var_name.get().strip(),"email":self.var_email.get().strip(),"phone":self.var_phone.get().strip(),"location":self.var_location.get().strip(),"linkedin":self.var_linkedin.get().strip(),"github":self.var_github.get().strip()}
         self.curriculum["summary"]=self.txt_summary.get("1.0","end").strip(); save_curriculum(self.curriculum)
-        self.env.update(GEMINI_API_KEY=self.var_gemini_key.get().strip(),GEMINI_MODEL=self.var_gemini_model.get().strip() or "gemini-flash-latest",LLM_PROVIDER=self.var_llm_provider.get().strip().lower(),OLLAMA_HOST=self.var_ollama_host.get().strip(),OLLAMA_MODEL=self.var_ollama_model.get().strip(),OPENAI_API_KEY=self.var_openai_key.get().strip(),CLAUDE_API_KEY=self.var_claude_key.get().strip(),GROQ_API_KEY=self.var_groq_key.get().strip(),OPENROUTER_API_KEY=self.var_openrouter_key.get().strip(),OPENROUTER_MODEL=self.var_openrouter_model.get().strip(),CUSTOM_LLM_URL=self.var_custom_url.get().strip(),CUSTOM_LLM_KEY=self.var_custom_key.get(),CUSTOM_LLM_MODEL=self.var_custom_model.get().strip().strip(),GITHUB_TOKEN=self.var_github_token.get().strip(),SMTP_HOST=self.var_smtp_host.get().strip(),SMTP_PORT=self.var_smtp_port.get().strip(),SMTP_USER=self.var_smtp_user.get().strip(),SMTP_PASS=self.var_smtp_pass.get().strip(),WORK_MODE=self.var_work_mode.get().strip(),PRESENCIAL_LOCATION=self.var_presencial_loc.get().strip(),CONTRACT_TYPE=self.var_contract.get().strip(),DAILY_LIMIT=str(int(self.var_daily_limit.get())))
+        self.env.update(GEMINI_API_KEY=self.var_gemini_key.get().strip(),GEMINI_MODEL=self.var_gemini_model.get().strip() or "gemini-flash-latest",LLM_PROVIDER=self.var_llm_provider.get().strip().lower(),OLLAMA_HOST=self.var_ollama_host.get().strip(),OLLAMA_MODEL=self.var_ollama_model.get().strip(),OPENAI_API_KEY=self.var_openai_key.get().strip(),CLAUDE_API_KEY=self.var_claude_key.get().strip(),GROQ_API_KEY=self.var_groq_key.get().strip(),OPENROUTER_API_KEY=self.var_openrouter_key.get().strip(),OPENROUTER_MODEL=self.var_openrouter_model.get().strip(),CUSTOM_LLM_URL=self.var_custom_url.get().strip(),CUSTOM_LLM_KEY=self.var_custom_key.get(),CUSTOM_LLM_MODEL=self.var_custom_model.get().strip(),CUSTOM_LLM_MODELS=self.var_custom_models.get().strip().strip(),GITHUB_TOKEN=self.var_github_token.get().strip(),SMTP_HOST=self.var_smtp_host.get().strip(),SMTP_PORT=self.var_smtp_port.get().strip(),SMTP_USER=self.var_smtp_user.get().strip(),SMTP_PASS=self.var_smtp_pass.get().strip(),WORK_MODE=self.var_work_mode.get().strip(),PRESENCIAL_LOCATION=self.var_presencial_loc.get().strip(),CONTRACT_TYPE=self.var_contract.get().strip(),DAILY_LIMIT=str(int(self.var_daily_limit.get())))
         save_env_dict(self.env)
         # No .exe, "Executar Automação" roda run_pipeline() no MESMO processo (sem subprocess
         # python.exe separado, que não existe empacotado) — sem isto, Config.LLM_PROVIDER e as
@@ -301,6 +302,7 @@ class App(tb.Window, PerfilTabMixin, BuscaTabMixin, IATabMixin, ExecucaoTabMixin
         Config.CUSTOM_LLM_URL = self.env.get("CUSTOM_LLM_URL","")
         Config.CUSTOM_LLM_KEY = self.env.get("CUSTOM_LLM_KEY","")
         Config.CUSTOM_LLM_MODEL = self.env.get("CUSTOM_LLM_MODEL","")
+        Config.CUSTOM_LLM_MODELS = [m.strip() for m in self.env.get("CUSTOM_LLM_MODELS","").split(",") if m.strip()]
         Config.GITHUB_TOKEN = self.env.get("GITHUB_TOKEN","")
         # SMTP também precisa recarregar: "Aprovar e Enviar" (Histórico) roda no mesmo processo
         # e lia o valor de quando o app abriu.
@@ -344,7 +346,7 @@ class App(tb.Window, PerfilTabMixin, BuscaTabMixin, IATabMixin, ExecucaoTabMixin
                 self.var_ollama_host.set(self.env.get("OLLAMA_HOST","http://localhost:11434")); self.var_ollama_model.set(self.env.get("OLLAMA_MODEL","llama3:latest"))
                 self.var_openai_key.set(self.env.get("OPENAI_API_KEY","")); self.var_claude_key.set(self.env.get("CLAUDE_API_KEY","")); self.var_groq_key.set(self.env.get("GROQ_API_KEY",""))
                 self.var_openrouter_key.set(self.env.get("OPENROUTER_API_KEY","")); self.var_openrouter_model.set(self.env.get("OPENROUTER_MODEL","minimax/minimax-m3:free"))
-                self.var_custom_url.set(self.env.get("CUSTOM_LLM_URL","")); self.var_custom_key.set(self.env.get("CUSTOM_LLM_KEY","")); self.var_custom_model.set(self.env.get("CUSTOM_LLM_MODEL",""))
+                self.var_custom_url.set(self.env.get("CUSTOM_LLM_URL","")); self.var_custom_key.set(self.env.get("CUSTOM_LLM_KEY","")); self.var_custom_model.set(self.env.get("CUSTOM_LLM_MODEL","")); self.var_custom_models.set(self.env.get("CUSTOM_LLM_MODELS",""))
                 self.var_smtp_host.set(self.env.get("SMTP_HOST","smtp.gmail.com")); self.var_smtp_port.set(self.env.get("SMTP_PORT","587")); self.var_smtp_user.set(self.env.get("SMTP_USER","")); self.var_smtp_pass.set(self.env.get("SMTP_PASS",""))
                 self.var_github_token.set(self.env.get("GITHUB_TOKEN",""))
             messagebox.showinfo("Importar","Importado com sucesso!")
