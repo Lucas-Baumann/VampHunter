@@ -85,6 +85,28 @@ DEMO_JOBS = [
 
 _cfg_lock = threading.Lock()
 
+# Limites do teste — um modelo lento/travado não pode segurar a descoberta por minutos:
+PER_CALL_TIMEOUT = 25      # prazo RÍGIDO por chamada (o timeout do requests só mede o intervalo entre bytes)
+MAX_CONSECUTIVE_FAILS = 2  # 2 falhas seguidas num modelo = pula o resto dele
+MAX_TOTAL_SECONDS = 600    # teto da descoberta inteira; estourou, devolve o que já foi avaliado
+
+
+def _guarded(fn, seconds):
+    """Roda fn() com prazo rígido. Devolve (ok, resultado); estourou o prazo -> (False, None).
+    A thread abandonada termina sozinha quando o servidor responder (é daemon)."""
+    box = {}
+    def run():
+        try:
+            box["v"] = fn()
+        except Exception as e:  # noqa: BLE001
+            box["e"] = e
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    th.join(seconds)
+    if th.is_alive() or "v" not in box:
+        return False, None
+    return True, box["v"]
+
 
 def compute_nota(formato: float, erro_medio: float, mediana_s: float) -> float:
     acur = max(0.0, 100 - erro_medio)
@@ -101,9 +123,14 @@ class _CustomOverride:
         _cfg_lock.acquire()
         self.old = (Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL, Config.CUSTOM_LLM_MODELS)
         Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL, Config.CUSTOM_LLM_MODELS = self.new
+        import llm
+        self.old_net = (llm.REQUEST_TIMEOUT, llm.RETRIES_ENABLED)
+        llm.REQUEST_TIMEOUT, llm.RETRIES_ENABLED = PER_CALL_TIMEOUT - 5, False
         return self
 
     def __exit__(self, *exc):
+        import llm
+        llm.REQUEST_TIMEOUT, llm.RETRIES_ENABLED = self.old_net
         Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL, Config.CUSTOM_LLM_MODELS = self.old
         _cfg_lock.release()
 
@@ -118,45 +145,63 @@ def rank_models(chat_url: str, api_key: str, models: list = None, top: int = 5, 
     say = progress or (lambda m: None)
     stop = should_stop or (lambda: False)
 
+    start = time.time()
+    over = lambda: time.time() - start > MAX_TOTAL_SECONDS
+
     if models is None:
         say("Listando os modelos do provedor…")
         models = list_models(chat_url, api_key)
     if not models:
         return []
 
-    # 2. ping — só segue com quem responde nesse plano
-    alive = []
+    # 2. ping — só segue com quem responde nesse plano (e rápido: PER_CALL_TIMEOUT)
+    alive, lentos = [], []
     for i, m in enumerate(models, 1):
         if stop():
             return []
+        if over():
+            say("Tempo limite do teste atingido — usando o que já foi testado.")
+            break
         say(f"Testando acesso {i}/{len(models)}: {m}")
         with _CustomOverride(chat_url, api_key, m):
             t0 = time.time()
-            out = llm.call_llm("Responda apenas: OK")
+            done, out = _guarded(lambda: llm.call_llm("Responda apenas: OK"), PER_CALL_TIMEOUT)
             dt = time.time() - t0
-        if out and out.strip():
+        if not done:
+            lentos.append(m)
+        elif out and out.strip():
             alive.append((dt, m))
         time.sleep(pause)
     alive.sort()  # os mais rápidos primeiro — o benchmark é limitado a max_candidates
     cands = [m for _, m in alive[:max_candidates]]
     if not cands:
+        if lentos:
+            say(f"{len(lentos)} modelo(s) não responderam em {PER_CALL_TIMEOUT}s e foram descartados.")
         return []
 
     # 3. benchmark
     results = []
     for mi, m in enumerate(cands, 1):
-        errs, lat, ok = [], [], 0
+        if over():
+            say("Tempo limite do teste atingido — usando o que já foi avaliado.")
+            break
+        errs, lat, ok, fails = [], [], 0, 0
         for ji, (title, company, desc, ref) in enumerate(DEMO_JOBS, 1):
             if stop():
                 return []
             say(f"Avaliando {mi}/{len(cands)} ({m}) — vaga {ji}/{len(DEMO_JOBS)}")
             with _CustomOverride(chat_url, api_key, m):
                 t0 = time.time()
-                score, _reason, src = evaluate_match_score(title, company, desc, DEMO_CV)
+                done, res = _guarded(lambda: evaluate_match_score(title, company, desc, DEMO_CV), PER_CALL_TIMEOUT)
                 lat.append(time.time() - t0)
-            if src == "llm":
+            if done and res and res[2] == "llm":
                 ok += 1
-                errs.append(abs(score - ref))
+                fails = 0
+                errs.append(abs(res[0] - ref))
+            else:
+                fails += 1
+                if fails >= MAX_CONSECUTIVE_FAILS:   # disjuntor: não insiste num modelo ruim
+                    break
             time.sleep(pause)
         formato = 100 * ok / len(DEMO_JOBS)
         mae = statistics.mean(errs) if errs else 100.0

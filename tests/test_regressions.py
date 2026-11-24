@@ -346,6 +346,45 @@ def test_modelrank_ranking_e_cadeia_de_reserva():
     finally:
         Config.LLM_PROVIDER, Config.CUSTOM_LLM_URL, Config.CUSTOM_LLM_KEY, Config.CUSTOM_LLM_MODEL, Config.CUSTOM_LLM_MODELS = old
 
+def test_modelrank_timeout_disjuntor_e_teto():
+    import time as _t, ats_optimizer
+    real_sleep = _t.sleep   # guardado ANTES: patch de time.sleep é global e anularia o 'servidor travado'
+    ref = {j[0]: j[3] for j in modelrank.DEMO_JOBS}
+    def ev(title, company, desc, cv):
+        m = Config.CUSTOM_LLM_MODEL
+        if m == "trava": real_sleep(2)                    # servidor que nunca responde
+        if m == "falha": return 40, "x", "heuristic"      # responde, mas sem JSON utilizável
+        return ref[title], "ok", "llm"
+    chamadas = {"trava": 0, "falha": 0}
+    def counting(title, company, desc, cv):
+        m = Config.CUSTOM_LLM_MODEL            # lido ANTES: o modelo "trava" só volta depois do Config mudar
+        if m in chamadas: chamadas[m] += 1
+        return ev(title, company, desc, cv)
+    fast_ping = lambda prompt: "OK"
+    timing = mock.patch.multiple(modelrank, PER_CALL_TIMEOUT=0.3)
+    with mock.patch.object(ats_optimizer, "evaluate_match_score", side_effect=counting), \
+         mock.patch.object(llm, "call_llm", side_effect=fast_ping), mock.patch.object(modelrank.time, "sleep"), timing:
+        t0 = _t.time()
+        res = modelrank.rank_models("https://x/v1/chat/completions", "k", models=["bom", "trava", "falha"], top=5)
+        gasto = _t.time() - t0
+    nomes = [r["model"] for r in res]
+    assert nomes[0] == "bom" and res[0]["formato"] == 100
+    assert chamadas["trava"] == 2 and chamadas["falha"] == 2            # disjuntor: 2 falhas seguidas e desiste (não 8)
+    assert gasto < 5, gasto                                              # nada de esperar o servidor travado terminar
+    # ping que trava: modelo descartado por prazo, sem derrubar o resto
+    slow_ping = lambda prompt: (real_sleep(2), "OK")[1] if Config.CUSTOM_LLM_MODEL == "lento" else "OK"
+    with mock.patch.object(ats_optimizer, "evaluate_match_score", side_effect=counting), \
+         mock.patch.object(llm, "call_llm", side_effect=slow_ping), mock.patch.object(modelrank.time, "sleep"), timing:
+        res2 = modelrank.rank_models("https://x/v1/chat/completions", "k", models=["lento", "bom"], top=5)
+    assert [r["model"] for r in res2] == ["bom"]
+    # teto total: com o prazo estourado devolve o que já tem, sem avaliar o resto
+    with mock.patch.object(ats_optimizer, "evaluate_match_score", side_effect=counting), \
+         mock.patch.object(llm, "call_llm", side_effect=fast_ping), mock.patch.object(modelrank.time, "sleep"), \
+         mock.patch.object(modelrank, "MAX_TOTAL_SECONDS", -1):
+        assert modelrank.rank_models("https://x/v1/chat/completions", "k", models=["bom"], top=5) == []
+    # o teste não deixa timeout curto/sem retry vazando pro uso normal
+    assert llm.REQUEST_TIMEOUT == 45 and llm.RETRIES_ENABLED is True
+
 
 if __name__ == "__main__":
     fails = 0

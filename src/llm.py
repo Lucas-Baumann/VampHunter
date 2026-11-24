@@ -18,6 +18,9 @@ from config import Config
 
 _RETRY_STATUS = {429, 500, 502, 503, 504}
 _BACKOFF = (2, 5)  # esperas antes da 2ª e da 3ª tentativa
+# Ajustáveis (o teste de modelos usa valores curtos e sem retry — ver modelrank.py)
+REQUEST_TIMEOUT = 45
+RETRIES_ENABLED = True
 
 # Provedores compatíveis com a API da OpenAI: nome -> (URL, atributo da chave, atributo do modelo)
 OPENAI_COMPAT = {
@@ -51,11 +54,13 @@ def _explain_status(status: int, body: str) -> str:
     return f"HTTP {status}" + (f" ({dica})" if dica else "") + f": {str(body)[:200]}"
 
 
-def _post_with_retry(url: str, timeout: int = 45, **kwargs) -> requests.Response:
+def _post_with_retry(url: str, timeout: int = None, **kwargs) -> requests.Response:
     """requests.post com até 3 tentativas em 429/5xx/erro de rede. Levanta a última exceção
     de rede se todas falharem; devolve a última resposta HTTP se o status continuar ruim."""
-    for attempt in range(len(_BACKOFF) + 1):
-        last = attempt == len(_BACKOFF)
+    timeout = timeout or REQUEST_TIMEOUT
+    n_retries = len(_BACKOFF) if RETRIES_ENABLED else 0
+    for attempt in range(n_retries + 1):
+        last = attempt == n_retries
         try:
             r = requests.post(url, timeout=timeout, **kwargs)
             if r.status_code not in _RETRY_STATUS or last:
