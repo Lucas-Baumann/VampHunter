@@ -13,10 +13,15 @@ Limites: o conjunto é pequeno e genérico (mede se o modelo pontua com bom sens
 entende o SEU nicho) — pro teste pesado, com vagas e currículo reais, use tests/benchmark_modelos.py.
 """
 import re
+import json
+import hashlib
 import time
 import threading
 import statistics
 import requests
+
+from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
 
 from config import Config
 
@@ -210,3 +215,64 @@ def rank_models(chat_url: str, api_key: str, models: list = None, top: int = 5, 
                         "erro_medio": round(mae, 1), "mediana_s": round(med, 1)})
     results.sort(key=lambda r: -r["nota"])
     return results[:top]
+
+
+# --- cache local do ranking -------------------------------------------------------------------
+# O ranking leva minutos e gasta chamadas — guarda o resultado em model_rankings.json (pasta de
+# dados do app) por provedor + chave. A chave NUNCA é gravada: só uma impressão digital (hash
+# truncado) pra saber se é a mesma conta (planos diferentes enxergam modelos diferentes).
+CACHE_TTL_DAYS = 14   # modelos gratuitos mudam de nome/disponibilidade — depois disso, refaz
+
+
+def _cache_path():
+    return Config.BASE_DIR / "model_rankings.json"
+
+
+def _host(chat_url: str) -> str:
+    return (urlparse(chat_url or "").netloc or (chat_url or "")).lower()
+
+
+def key_fingerprint(api_key: str) -> str:
+    return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()[:12]
+
+
+def _read_cache() -> dict:
+    try:
+        d = json.loads(_cache_path().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def load_cached(chat_url: str, api_key: str):
+    """Ranking salvo desse provedor+chave, ou None (não existe, outra chave, ou passou do TTL).
+    Retorna {'results': [...], 'ranked_at': datetime(UTC), 'age_days': int}."""
+    entry = _read_cache().get(_host(chat_url))
+    if not isinstance(entry, dict) or entry.get("key_fp") != key_fingerprint(api_key) or not entry.get("results"):
+        return None
+    try:
+        at = datetime.strptime(entry["ranked_at"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+    age = datetime.now(timezone.utc) - at
+    if age > timedelta(days=CACHE_TTL_DAYS):
+        return None
+    return {"results": entry["results"], "ranked_at": at, "age_days": age.days}
+
+
+def save_cached(chat_url: str, api_key: str, results: list) -> bool:
+    if not results:
+        return False
+    data = _read_cache()
+    data[_host(chat_url)] = {
+        "key_fp": key_fingerprint(api_key),
+        "ranked_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        "results": results,
+    }
+    try:
+        tmp = _cache_path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(_cache_path())   # escrita atômica: nunca deixa o arquivo pela metade
+        return True
+    except Exception:
+        return False

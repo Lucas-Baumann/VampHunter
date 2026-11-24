@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Testes de regressão dos bugs corrigidos na auditoria de 2026-11-19.
 Sem rede, sem IA, banco temporário — rode com: python tests/test_regressions.py (ou pytest)."""
-import sys, pathlib, tempfile
+import sys, json, pathlib, tempfile
 from unittest import mock
 
 BASE = pathlib.Path(__file__).resolve().parent.parent
@@ -412,6 +412,65 @@ def test_gui_aba_ia_reage_a_chave_custom_e_salva_apos_ranking():
         assert app.winfo_height() <= app.winfo_screenheight() and app.winfo_width() <= app.winfo_screenwidth()
     finally:
         app.destroy()
+
+def test_modelrank_cache_local():
+    NIM = "https://integrate.api.nvidia.com/v1/chat/completions"
+    res = [{"model": "m0", "nota": 92.6, "formato": 100, "erro_medio": 3.0, "mediana_s": 1.1}]
+    with tempfile.TemporaryDirectory() as d:
+        old = Config.BASE_DIR
+        Config.BASE_DIR = pathlib.Path(d)
+        try:
+            assert modelrank.load_cached(NIM, "nvapi-segredo") is None            # nada salvo ainda
+            assert modelrank.save_cached(NIM, "nvapi-segredo", res) is True
+            c = modelrank.load_cached(NIM, "nvapi-segredo")
+            assert c and c["results"] == res and c["age_days"] == 0
+            texto = (pathlib.Path(d) / "model_rankings.json").read_text(encoding="utf-8")
+            assert "nvapi-segredo" not in texto                                     # a chave NUNCA vai pro disco
+            assert modelrank.load_cached(NIM, "nvapi-outra-conta") is None          # outra chave = outro plano = refaz
+            assert modelrank.load_cached("https://api.deepseek.com/v1/chat/completions", "nvapi-segredo") is None  # outro provedor
+            assert modelrank.save_cached(NIM, "k", []) is False                      # não guarda ranking vazio
+            # provedores convivem no mesmo arquivo
+            modelrank.save_cached("https://api.mistral.ai/v1/chat/completions", "kk", res)
+            assert modelrank.load_cached(NIM, "nvapi-segredo") is not None
+            # passou do prazo: ignora (modelos gratuitos mudam)
+            dados = json.loads(texto)
+            dados["integrate.api.nvidia.com"]["ranked_at"] = "2020-01-01 00:00:00"
+            (pathlib.Path(d) / "model_rankings.json").write_text(json.dumps(dados), encoding="utf-8")
+            assert modelrank.load_cached(NIM, "nvapi-segredo") is None
+            # arquivo corrompido não derruba nada
+            (pathlib.Path(d) / "model_rankings.json").write_text("{quebrado", encoding="utf-8")
+            assert modelrank.load_cached(NIM, "nvapi-segredo") is None
+            assert modelrank.save_cached(NIM, "nvapi-segredo", res) is True
+        finally:
+            Config.BASE_DIR = old
+
+
+def test_gui_reaproveita_ranking_salvo_sem_refazer():
+    import tkinter, tkinter.messagebox
+    try:
+        import gui as G
+        app = G.App()
+    except tkinter.TclError:
+        return
+    NIM = "https://integrate.api.nvidia.com/v1/chat/completions"
+    res = [{"model": f"m{i}", "nota": 90 - i, "formato": 100, "erro_medio": 3.0, "mediana_s": 1.0} for i in range(5)]
+    with tempfile.TemporaryDirectory() as d:
+        old = Config.BASE_DIR
+        Config.BASE_DIR = pathlib.Path(d)
+        try:
+            modelrank.save_cached(NIM, "nvapi-x", res)
+            app.var_llm_provider.set("custom"); app.var_custom_url.set(NIM); app.var_custom_key.set("nvapi-x"); app.update()
+            with mock.patch.object(tkinter.messagebox, "askyesno", return_value=True) as ask, \
+                 mock.patch.object(tkinter.messagebox, "showinfo"), mock.patch.object(app, "save_all") as save, \
+                 mock.patch.object(modelrank, "rank_models") as rank:
+                app.discover_models()
+            assert ask.call_count == 1 and "Ranking salvo" in ask.call_args.args[0]    # só a pergunta do salvo, sem o aviso de custo
+            rank.assert_not_called()                                                    # nenhuma chamada de IA
+            assert app.var_custom_model.get() == "m0" and app.var_custom_models.get() == "m1,m2,m3,m4"
+            assert "ranking salvo de" in app.lbl_discover.cget("text") and save.called
+        finally:
+            Config.BASE_DIR = old
+            app.destroy()
 
 
 if __name__ == "__main__":

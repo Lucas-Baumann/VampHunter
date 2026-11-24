@@ -39,3 +39,5 @@ playwright/.cache/
 Thumbs.db
 
 dist_novo/
+model_rankings.json
+model_rankings.tmp

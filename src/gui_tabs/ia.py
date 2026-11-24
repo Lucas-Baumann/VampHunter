@@ -294,6 +294,22 @@ class IATabMixin:
         url=self.var_custom_url.get().strip(); key=self.var_custom_key.get().strip()
         if not url or not key:
             messagebox.showwarning("Descobrir modelos","Preencha a URL (use o Atalho) e a chave primeiro."); return
+        # ranking já feito (mesmo provedor + mesma chave, até 14 dias): oferece reaproveitar,
+        # sem gastar nenhuma chamada nem esperar os minutos do teste
+        try:
+            import modelrank
+            cached=modelrank.load_cached(url,key)
+        except Exception:
+            cached=None
+        if cached:
+            quando=cached["ranked_at"].astimezone().strftime("%d/%m/%Y %H:%M")
+            if messagebox.askyesno("Ranking salvo",
+                f"Já existe um ranking deste provedor, feito em {quando} (há {cached['age_days']} dia(s)).\n\n"
+                f"1º: {cached['results'][0]['model']} (nota {cached['results'][0]['nota']})\n\n"
+                "Usar o ranking salvo? Não gasta chamadas e é instantâneo.\n\n"
+                "Sim = usar o salvo   ·   Não = refazer o teste (leva alguns minutos)"):
+                self._discover_cancel=False
+                self._discover_done(cached["results"],cached_at=quando); return
         # o app NÃO sabe se um modelo é gratuito (o /models da maioria dos provedores não informa
         # preço) — avisa antes de gastar ~100 chamadas na chave da pessoa.
         if "nvidia.com" in url:
@@ -316,6 +332,8 @@ class IATabMixin:
             try:
                 import modelrank
                 res=modelrank.rank_models(url,key,progress=progress,should_stop=lambda: self._discover_cancel)
+                if res and not self._discover_cancel:
+                    modelrank.save_cached(url,key,res)   # guarda local: da próxima vez não precisa refazer
                 self.after(0, lambda: self._discover_done(res))
             except Exception as e:
                 msg=str(e)
@@ -327,7 +345,7 @@ class IATabMixin:
         self.btn_discover.configure(state="normal"); self.btn_discover_stop.configure(state="disabled")
         self.lbl_discover.configure(text=f"✗ {msg}",text_color=t["danger"])
 
-    def _discover_done(self,res):
+    def _discover_done(self,res,cached_at=None):
         t=get_active_theme()
         self.btn_discover.configure(state="normal"); self.btn_discover_stop.configure(state="disabled")
         if self._discover_cancel:
@@ -341,7 +359,7 @@ class IATabMixin:
             self.save_all(silent=True); salvo=True
         except Exception:
             salvo=False
-        self.lbl_discover.configure(text=f"✓ Principal: {res[0]['model']} (nota {res[0]['nota']}) + {len(res)-1} reserva(s). "+("Já salvo." if salvo else "Clique em Salvar."),text_color=t["success"])
+        self.lbl_discover.configure(text=f"✓ Principal: {res[0]['model']} (nota {res[0]['nota']}) + {len(res)-1} reserva(s). "+("Já salvo." if salvo else "Clique em Salvar.")+(f" (ranking salvo de {cached_at})" if cached_at else ""),text_color=t["success"])
         linhas="\n".join(f"{i}. {r['model']}\n    nota {r['nota']}  ·  formato {r['formato']}%  ·  erro médio {r['erro_medio']} pts  ·  {r['mediana_s']}s/vaga" for i,r in enumerate(res,1))
         messagebox.showinfo("Melhores modelos",f"Ranking (vagas de exemplo):\n\n{linhas}\n\nO 1º virou o modelo principal e os demais, reservas automáticas.\n"+("Já salvo — use 'Testar Conexão' para conferir." if salvo else "Clique em 'Salvar' para guardar."))
 
