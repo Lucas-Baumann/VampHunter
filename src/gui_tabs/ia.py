@@ -290,6 +290,18 @@ class IATabMixin:
         url=self.var_custom_url.get().strip(); key=self.var_custom_key.get().strip()
         if not url or not key:
             messagebox.showwarning("Descobrir modelos","Preencha a URL (use o Atalho) e a chave primeiro."); return
+        # o app NÃO sabe se um modelo é gratuito (o /models da maioria dos provedores não informa
+        # preço) — avisa antes de gastar ~100 chamadas na chave da pessoa.
+        if "nvidia.com" in url:
+            aviso=("O teste faz cerca de 100 chamadas curtas na sua chave da NVIDIA.\n\n"
+                   "O acesso gratuito tem limite de ~40 chamadas por minuto (por isso leva alguns minutos). "
+                   "O app não consegue saber se algum modelo consome créditos da sua conta — confira em build.nvidia.com.")
+        else:
+            aviso=("O teste faz cerca de 100 chamadas curtas na sua chave deste provedor.\n\n"
+                   "O app NÃO sabe quais modelos são gratuitos: se o plano for pago, essas chamadas podem ser cobradas "
+                   "(em geral centavos) e o ranking pode escolher um modelo mais caro como principal.")
+        if not messagebox.askyesno("Descobrir melhores modelos", aviso+"\n\nContinuar?", icon="warning"):
+            return
         t=get_active_theme()
         self._discover_cancel=False
         self.btn_discover.configure(state="disabled"); self.btn_discover_stop.configure(state="normal")
